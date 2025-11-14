@@ -19,13 +19,13 @@ export default async function handler(req, res) {
 
       const { data: existing } = await supabase
         .from('users')
-        .select('id')
-        .eq('id', userID)
+        .select('user_id')
+        .eq('user_id', userID)
         .single();
 
       if (!existing) {
-        await supabase.from('users').insert({
-          id: userID,
+        await supabase.from('players').insert({
+          user_id: userID,
           ref_by: refID || null,
           points: 0,
           usdt: 0
@@ -40,16 +40,16 @@ export default async function handler(req, res) {
       if (!userID) throw new Error('Missing userID');
 
       const { data: user } = await supabase
-        .from('users')
+        .from('players')
         .select('*')
-        .eq('id', userID)
+        .eq('user_id', userID)
         .single();
 
       if (!user) throw new Error('User not found');
 
       const { count } = await supabase
-        .from('users')
-        .select('id', { count: 'exact', head: true })
+        .from('players')
+        .select('user_id', { count: 'exact', head: true })
         .eq('ref_by', userID);
 
       return res.json({
