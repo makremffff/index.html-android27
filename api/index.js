@@ -18,7 +18,7 @@ export default async function handler(req, res) {
       if (!userID) throw new Error('Missing userID');
 
       const { data: existing } = await supabase
-        .from('users')
+        .from('players')
         .select('user_id')
         .eq('user_id', userID)
         .single();
