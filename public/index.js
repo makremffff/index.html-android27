@@ -4,7 +4,7 @@ const $ = id => document.getElementById(id);
 function getTelegramUserID() {
   if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id)
     return window.Telegram.WebApp.initDataUnsafe.user.id;
-  // خارج التليجرام نستخدم queryString كـ fallback
+
   const params = new URLSearchParams(location.search);
   const fake = params.get('fakeId');
   return fake ? parseInt(fake, 10) : 0;
@@ -20,12 +20,14 @@ function getRefParam() {
 
 async function api(action, payload = {}) {
   const uid = getTelegramUserID();
-  const body = { user_id: uid, ...payload };
-  const res = await fetch(`/api?action=${action}`, {
+  const body = { action, user_id: uid, ...payload };
+
+  const res = await fetch('/api', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
+
   return res.json();
 }
 
@@ -36,8 +38,7 @@ async function registerUser() {
 }
 
 async function getProfile() {
-  const data = await api('getProfile');
-  return data;
+  return await api('getProfile');
 }
 
 // ====== UI update ======
@@ -45,7 +46,7 @@ function updateUI(data) {
   $('points').textContent = data.points ?? 0;
   $('usdt').textContent   = (data.usdt ?? 0).toFixed(2);
   $('refCount').textContent = data.refs ?? 0;
-  // صورة واسم المستخدم يأتيان من التليجرام مباشرة
+
   if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
     const u = window.Telegram.WebApp.initDataUnsafe.user;
     if (u.photo_url) {
@@ -59,6 +60,7 @@ function updateUI(data) {
 // ====== صفحات ======
 function showPage(id) {
   document.querySelectorAll('.page, .screen').forEach(el => el.classList.remove('active'));
+
   if (id === 'home') {
     $('home').classList.add('active');
     $('userCircle').style.display = 'flex';
@@ -74,9 +76,8 @@ function showPage(id) {
   }
 }
 
-// ====== أزرار التنقل ======
+// ====== أزرار ======
 function setupButtons() {
-  // التنقل الرئيسي
   $('withdrawBtn').onclick = () => showPage('withdraw');
   $('taskBtn').onclick     = () => showPage('task');
   $('adsBtn').onclick      = () => handleWatchAd();
@@ -84,15 +85,12 @@ function setupButtons() {
   $('ledbordBtn').onclick  = () => showPage('ledbord');
   $('refalBtn').onclick    = () => showPage('refal');
 
-  // أزرار رجوع
   ['withdrawBack','taskBack','swapBack','ledbordBack','refalBack']
     .forEach(id => $(id).onclick = () => showPage('home'));
 
-  // تحويل النقاط
   $('pointsInput').oninput = () => calcSwap();
   $('convertBtn').onclick  = () => handleConvert();
 
-  // نسخ الإحالة
   $('copyBtn').onclick = () => copyRefLink();
 }
 
@@ -106,8 +104,10 @@ function calcSwap() {
 async function handleConvert() {
   const pts = parseInt($('pointsInput').value) || 0;
   if (pts <= 0) return;
+
   const res = await api('swap', { points: pts });
   if (res.error) return showSwapMsg(res.error, 'error');
+
   $('pointsInput').value = '';
   calcSwap();
   await reloadProfile();
@@ -135,19 +135,21 @@ function copyRefLink() {
 
 // ====== إعلانات GigaPub ======
 async function adStatus() {
-  const res = await api('adStatus');
-  return res;
+  return await api('adStatus');
 }
 
 async function handleWatchAd() {
   const st = await adStatus();
   if (!st.canWatch) return;
+
   try {
     await window.showGiga();
     await api('adWatch');
     await reloadProfile();
     await updateAdCounter();
-  } catch (e) { console.warn('Ad error:', e); }
+  } catch (e) {
+    console.warn('Ad error:', e);
+  }
 }
 
 async function updateAdCounter() {
@@ -169,7 +171,6 @@ async function init() {
   await reloadProfile();
   calcSwap();
   await updateAdCounter();
-  // تحديث العداد كل ثانيتين
   setInterval(updateAdCounter, 2000);
 }
 
