@@ -1,255 +1,161 @@
-/* ============================
-   Telegram USER ID
-============================ */
+// /public/index.js
+// Vanilla JS فقط، لا يستخدم أى مكتبات أو localStorage لحفظ بيانات المستخدم
+
+/* ---------- 1️⃣ Helpers ---------- */
+const $ = id => document.getElementById(id);
+
 function getTelegramUserID() {
   if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
     return window.Telegram.WebApp.initDataUnsafe.user.id;
   }
-
-  // fallback خارج تلغرام
-  const saved = localStorage.getItem("telegramUser");
-  if (saved) {
-    try {
-      return JSON.parse(saved).id;
-    } catch {}
-  }
-  return "default";
+  return 'default';
 }
 
-/* ============================
-   REF PARAM
-============================ */
 function getRefParam() {
-  const q = new URLSearchParams(window.location.search);
-  const s = q.get("startapp") || "";
-  return s.startsWith("ref_") ? s.replace("ref_", "") : null;
+  const start = new URLSearchParams(window.location.search).get('startapp');
+  if (start && start.startsWith('ref_')) return start.replace('ref_', '');
+  return null;
 }
 
-/* ============================
-   API CALLER
-============================ */
 async function api(action, params = {}) {
-  const res = await fetch("/api", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...params })
+  const body = { action, ...params, user_id: getTelegramUserID() };
+  const res = await fetch('/api', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
   });
   return res.json();
 }
 
-/* ============================
-   REGISTER
-============================ */
+/* ---------- 2️⃣ Registration & Profile ---------- */
 async function registerUser() {
-  await api("registerUser", {
-    userID: getTelegramUserID(),
-    refBy: getRefParam()
-  });
+  const refBy = getRefParam();
+  await api('registerUser', { ref_by: refBy });
 }
 
-/* ============================
-   PROFILE
-============================ */
 async function getProfile() {
-  return await api("getProfile", { userID: getTelegramUserID() });
+  const data = await api('getProfile');
+  updateUI(data);
 }
 
-/* ============================
-   UPDATE UI
-============================ */
-function updateUI(p) {
-  document.getElementById("points").textContent = p.points || 0;
-  document.getElementById("usdt").textContent = (p.usdt || 0).toFixed(2);
-  document.getElementById("refCount").textContent = p.refs || 0;
+/* ---------- 3️⃣ UI Update ---------- */
+function updateUI(data) {
+  $('points').textContent = data.points || 0;
+  $('usdt').textContent   = (data.usdt || 0).toFixed(2);
+  $('refCount').textContent = data.refs || 0;
 }
 
-/* ============================
-   LOAD TELEGRAM PROFILE
-============================ */
-function loadTelegramProfile() {
-  const tg = window.Telegram?.WebApp?.initDataUnsafe?.user;
-  const img = document.getElementById("userImg");
-  const name = document.getElementById("username");
-
-  if (!tg) return;
-
-  if (tg.photo_url) {
-    img.src = tg.photo_url;
-    img.style.display = "block";
-  }
-
-  if (tg.first_name) {
-    name.textContent = tg.first_name;
+/* ---------- 4️⃣ Navigation ---------- */
+function showPage(pageId) {
+  document.querySelectorAll('.page, .screen').forEach(el => el.classList.remove('active'));
+  if (pageId === 'home') {
+    $('home').classList.add('active');
+    $('userCircle').style.display = 'flex';
+    $('username').style.display   = 'block';
+    $('topBalance').style.display = 'flex';
+    $('adsCounterTop').style.display = 'block';
+  } else {
+    $(pageId).classList.add('active');
+    $('userCircle').style.display = 'none';
+    $('username').style.display   = 'none';
+    $('topBalance').style.display = 'none';
+    $('adsCounterTop').style.display = 'none';
   }
 }
 
-/* ============================
-   PAGE SWITCHER
-============================ */
-function showPage(id) {
-  document.querySelectorAll(".page, .screen").forEach(el => el.classList.remove("active"));
+/* ---------- 5️⃣ Buttons Setup ---------- */
+function setupButtons() {
+  // أزرار التنقل الرئيسية
+  document.querySelectorAll('[data-page]').forEach(btn => {
+    btn.addEventListener('click', () => showPage(btn.dataset.page));
+  });
 
-  if (id === "home") {
-    document.getElementById("home").classList.add("active");
-    document.getElementById("userCircle").style.display = "flex";
-    document.getElementById("username").style.display = "block";
-    document.getElementById("topBalance").style.display = "flex";
-    document.getElementById("adsCounterTop").style.display = "block";
-    return;
-  }
+  // زر الإعلانات
+  $('adsBtn').addEventListener('click', handleAdWatch);
 
-  const p = document.getElementById(id);
-  if (p) p.classList.add("active");
+  // زر التحويل
+  $('convertBtn').addEventListener('click', handleConvert);
 
-  document.getElementById("userCircle").style.display = "none";
-  document.getElementById("username").style.display = "none";
-  document.getElementById("topBalance").style.display = "none";
-  document.getElementById("adsCounterTop").style.display = "none";
+  // زر نسخ الرابط
+  $('copyBtn').addEventListener('click', copyRefLink);
+
+  // حقل الإدخال (حساب مباشر)
+  $('pointsInput').addEventListener('input', calcSwap);
 }
 
-/* ============================
-   SWAP SYSTEM
-============================ */
+/* ---------- 6️⃣ Swap Logic ---------- */
 function calcSwap() {
-  const pts = parseInt(document.getElementById("pointsInput").value) || 0;
+  const pts = parseInt($('pointsInput').value) || 0;
   const usdt = (pts / 100000 * 0.01).toFixed(4);
-  document.getElementById("usdtValue").textContent = `${usdt} USDT`;
+  $('usdtValue').textContent = usdt + ' USDT';
 }
 
 async function handleConvert() {
-  const input = document.getElementById("pointsInput");
-  const pts = parseInt(input.value) || 0;
-  if (pts <= 0) return;
+  const ptsRequested = parseInt($('pointsInput').value) || 0;
+  if (ptsRequested <= 0) return;
 
-  const res = await api("swap", {
-    userID: getTelegramUserID(),
-    points: pts
-  });
+  const res = await api('swap', { points: ptsRequested });
+  if (res.error) return showSwapMsg(res.error, 'error');
 
-  if (res.error) return showSwapMsg(res.error, "error");
-
-  showSwapMsg("Success!", "success");
-  input.value = "";
+  showSwapMsg('Success!', 'success');
+  $('pointsInput').value = '';
   calcSwap();
   updateUI(res);
 }
 
 function showSwapMsg(text, type) {
-  const box = document.getElementById("swapMsg");
+  const box = $('swapMsg');
   box.textContent = text;
   box.className = type;
-  box.style.opacity = "1";
-  setTimeout(() => (box.style.opacity = "0"), 2000);
+  box.style.opacity = '1';
+  setTimeout(() => box.style.opacity = '0', 2000);
 }
 
-/* ============================
-   COPY REF LINK
-============================ */
-function copyRefLink() {
-  const bot = window.env?.NEXT_PUBLIC_BOT_USERNAME || "Game_win_usdtBot";
-  const uid = getTelegramUserID();
-  const link = `https://t.me/${bot}/earn?startapp=ref_${uid}`;
-
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(link).then(showCopyMsg);
-  } else {
-    const ta = document.createElement("textarea");
-    ta.value = link;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-    showCopyMsg();
-  }
-}
-
-function showCopyMsg() {
-  const msg = document.getElementById("copyMsg");
-  msg.style.opacity = "1";
-  setTimeout(() => (msg.style.opacity = "0"), 2000);
-}
-
-/* ============================
-   ADS SYSTEM
-============================ */
+/* ---------- 7️⃣ Ads Logic ---------- */
 async function handleAdWatch() {
-  const res = await api("adWatch", { userID: getTelegramUserID() });
-  if (res.error) return alert(res.error);
-  updateUI(res);
-  updateAdButton();
-}
+  const status = await api('adStatus');
+  if (status.cooldown) return;          // العداد يعمل تلقائياً
+  if (status.remaining <= 0) return;    // وصل للحد اليومى
 
-async function updateAdButton() {
-  const res = await api("adStatus", { userID: getTelegramUserID() });
-
-  const counter = document.getElementById("adsCounterTop");
-  const btn = document.getElementById("adsBtn");
-
-  counter.textContent = res.remain;
-
-  if (res.remain <= 0) {
-    btn.style.opacity = 0.5;
-    btn.style.pointerEvents = "none";
-    return;
-  }
-
-  if (res.cooldown > 0) {
-    btn.style.opacity = 0.6;
-    btn.style.pointerEvents = "none";
-
-    let cd = res.cooldown;
-    const timer = setInterval(() => {
-      cd--;
-      counter.textContent = `${Math.floor(cd / 60)}m ${cd % 60}s`;
-      if (cd <= 0) {
-        clearInterval(timer);
-        btn.style.opacity = 1;
-        btn.style.pointerEvents = "auto";
-        counter.textContent = res.remain;
-      }
-    }, 1000);
+  try {
+    await window.showGiga();
+    const res = await api('adWatch');
+    updateUI(res);
+  } catch (e) {
+    console.warn('Ad error:', e);
   }
 }
 
-/* ============================
-   BUTTON SETUP
-============================ */
-function setupButtons() {
-  const pages = {
-    withdrawBtn: "withdraw",
-    taskBtn: "task",
-    swapBtn: "swap",
-    ledbordBtn: "ledbord",
-    refalBtn: "refal"
-  };
+/* ---------- 8️⃣ Copy Referral Link ---------- */
+function copyRefLink() {
+  const uid = getTelegramUserID();
+  const link = `https://t.me/Game_win_usdtBot/earn?startapp=ref_${uid}`;
 
-  Object.entries(pages).forEach(([btnId, page]) => {
-    document.getElementById(btnId)?.addEventListener("click", () => showPage(page));
+  navigator.clipboard.writeText(link).then(() => {
+    const m = $('copyMsg');
+    m.style.opacity = '1';
+    setTimeout(() => m.style.opacity = '0', 2000);
   });
-
-  document.getElementById("adsBtn")?.addEventListener("click", handleAdWatch);
-
-  ["withdrawBack", "taskBack", "ledbordBack", "swapBack", "refalBack"].forEach(id => {
-    document.getElementById(id)?.addEventListener("click", () => showPage("home"));
-  });
-
-  document.getElementById("copyBtn")?.addEventListener("click", copyRefLink);
-  document.getElementById("convertBtn")?.addEventListener("click", handleConvert);
-  document.getElementById("pointsInput")?.addEventListener("input", calcSwap);
 }
 
-/* ============================
-   INIT
-============================ */
+/* ---------- 9️⃣ Init ---------- */
 async function init() {
-  await registerUser();
-  const p = await getProfile();
-  updateUI(p);
-
-  loadTelegramProfile(); // تحميل صورة + اسم المستخدم
-
   setupButtons();
-  updateAdButton();
+  await registerUser();
+  await getProfile();
+
+  // تحديث العداد كل ثانية
+  setInterval(async () => {
+    const status = await api('adStatus');
+    $('adsCounterTop').textContent = status.remaining;
+    if (status.cooldown) {
+      $('adsBtn').style.pointerEvents = 'none';
+      $('adsBtn').style.opacity = 0.6;
+    } else {
+      $('adsBtn').style.pointerEvents = 'auto';
+      $('adsBtn').style.opacity = 1;
+    }
+  }, 1000);
 }
 
-window.addEventListener("DOMContentLoaded", init);
+document.addEventListener('DOMContentLoaded', init);
