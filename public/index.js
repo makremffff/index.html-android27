@@ -1,5 +1,3 @@
-// /public/index.js
-
 /* ============================
    Telegram USER ID
 ============================ */
@@ -7,6 +5,8 @@ function getTelegramUserID() {
   if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
     return window.Telegram.WebApp.initDataUnsafe.user.id;
   }
+
+  // fallback خارج تلغرام
   const saved = localStorage.getItem("telegramUser");
   if (saved) {
     try {
@@ -20,13 +20,13 @@ function getTelegramUserID() {
    REF PARAM
 ============================ */
 function getRefParam() {
-  const params = new URLSearchParams(window.location.search);
-  const s = params.get("startapp") || "";
+  const q = new URLSearchParams(window.location.search);
+  const s = q.get("startapp") || "";
   return s.startsWith("ref_") ? s.replace("ref_", "") : null;
 }
 
 /* ============================
-   API
+   API CALLER
 ============================ */
 async function api(action, params = {}) {
   const res = await fetch("/api", {
@@ -57,14 +57,34 @@ async function getProfile() {
 /* ============================
    UPDATE UI
 ============================ */
-function updateUI(data) {
-  document.getElementById("points").textContent = data.points || 0;
-  document.getElementById("usdt").textContent = (data.usdt || 0).toFixed(2);
-  document.getElementById("refCount").textContent = data.refs || 0;
+function updateUI(p) {
+  document.getElementById("points").textContent = p.points || 0;
+  document.getElementById("usdt").textContent = (p.usdt || 0).toFixed(2);
+  document.getElementById("refCount").textContent = p.refs || 0;
 }
 
 /* ============================
-   PAGE SYSTEM
+   LOAD TELEGRAM PROFILE
+============================ */
+function loadTelegramProfile() {
+  const tg = window.Telegram?.WebApp?.initDataUnsafe?.user;
+  const img = document.getElementById("userImg");
+  const name = document.getElementById("username");
+
+  if (!tg) return;
+
+  if (tg.photo_url) {
+    img.src = tg.photo_url;
+    img.style.display = "block";
+  }
+
+  if (tg.first_name) {
+    name.textContent = tg.first_name;
+  }
+}
+
+/* ============================
+   PAGE SWITCHER
 ============================ */
 function showPage(id) {
   document.querySelectorAll(".page, .screen").forEach(el => el.classList.remove("active"));
@@ -78,7 +98,9 @@ function showPage(id) {
     return;
   }
 
-  document.getElementById(id)?.classList.add("active");
+  const p = document.getElementById(id);
+  if (p) p.classList.add("active");
+
   document.getElementById("userCircle").style.display = "none";
   document.getElementById("username").style.display = "none";
   document.getElementById("topBalance").style.display = "none";
@@ -86,17 +108,14 @@ function showPage(id) {
 }
 
 /* ============================
-   SWAP CALC
+   SWAP SYSTEM
 ============================ */
 function calcSwap() {
   const pts = parseInt(document.getElementById("pointsInput").value) || 0;
   const usdt = (pts / 100000 * 0.01).toFixed(4);
-  document.getElementById("usdtValue").textContent = usdt + " USDT";
+  document.getElementById("usdtValue").textContent = `${usdt} USDT`;
 }
 
-/* ============================
-   CONVERT
-============================ */
 async function handleConvert() {
   const input = document.getElementById("pointsInput");
   const pts = parseInt(input.value) || 0;
@@ -107,10 +126,7 @@ async function handleConvert() {
     points: pts
   });
 
-  if (res.error) {
-    showSwapMsg(res.error, "error");
-    return;
-  }
+  if (res.error) return showSwapMsg(res.error, "error");
 
   showSwapMsg("Success!", "success");
   input.value = "";
@@ -130,9 +146,9 @@ function showSwapMsg(text, type) {
    COPY REF LINK
 ============================ */
 function copyRefLink() {
-  const BOT = window.env?.NEXT_PUBLIC_BOT_USERNAME || "Game_win_usdtBot";
+  const bot = window.env?.NEXT_PUBLIC_BOT_USERNAME || "Game_win_usdtBot";
   const uid = getTelegramUserID();
-  const link = `https://t.me/${BOT}/earn?startapp=ref_${uid}`;
+  const link = `https://t.me/${bot}/earn?startapp=ref_${uid}`;
 
   if (navigator.clipboard) {
     navigator.clipboard.writeText(link).then(showCopyMsg);
@@ -148,30 +164,23 @@ function copyRefLink() {
 }
 
 function showCopyMsg() {
-  const m = document.getElementById("copyMsg");
-  m.style.opacity = "1";
-  setTimeout(() => (m.style.opacity = "0"), 2000);
+  const msg = document.getElementById("copyMsg");
+  msg.style.opacity = "1";
+  setTimeout(() => (msg.style.opacity = "0"), 2000);
 }
 
 /* ============================
-   ADS
+   ADS SYSTEM
 ============================ */
 async function handleAdWatch() {
-  const userID = getTelegramUserID();
-  const res = await api("adWatch", { userID });
-
-  if (res.error) {
-    alert(res.error);
-    return;
-  }
-
+  const res = await api("adWatch", { userID: getTelegramUserID() });
+  if (res.error) return alert(res.error);
   updateUI(res);
   updateAdButton();
 }
 
 async function updateAdButton() {
-  const userID = getTelegramUserID();
-  const res = await api("adStatus", { userID });
+  const res = await api("adStatus", { userID: getTelegramUserID() });
 
   const counter = document.getElementById("adsCounterTop");
   const btn = document.getElementById("adsBtn");
@@ -236,6 +245,9 @@ async function init() {
   await registerUser();
   const p = await getProfile();
   updateUI(p);
+
+  loadTelegramProfile(); // تحميل صورة + اسم المستخدم
+
   setupButtons();
   updateAdButton();
 }
