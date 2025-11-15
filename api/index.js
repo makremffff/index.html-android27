@@ -1,9 +1,7 @@
-// /api/index.js
-
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-// ============= SUPABASE REQUEST =============
+/* ================= SUPABASE REQUEST ================= */
 async function supabaseRequest(method, path, body = null) {
   const opts = {
     method,
@@ -16,69 +14,76 @@ async function supabaseRequest(method, path, body = null) {
   if (body) opts.body = JSON.stringify(body);
 
   const res = await fetch(`${SUPABASE_URL}${path}`, opts);
-  return res.json();
+  const data = await res.json().catch(() => null);
+
+  if (!res.ok) return { error: data?.message || "Supabase Error" };
+  return data;
 }
 
-// ============= REGISTER =============
+/* ================= REGISTER ================= */
 async function registerUser(userID, refBy) {
   const exist = await supabaseRequest(
     "GET",
-    `/rest/v1/players?user_id=eq.${userID}&select=*`
+    `/rest/v1/users_data?user_id=eq.${userID}&select=*`
   );
+  if (exist?.length > 0) return;
 
-  if (exist && exist.length > 0) return;
+  const today = new Date().toISOString().split("T")[0];
+  const now = Math.floor(Date.now() / 1000);
 
-  await supabaseRequest("POST", "/rest/v1/players", {
+  await supabaseRequest("POST", "/rest/v1/users_data", {
     user_id: userID,
     points: 0,
     usdt: 0,
     ref_by: refBy || null,
     refs: 0,
     ads_watched_today: 0,
-    ads_last_watch: 0,
-    ads_date: new Date().toISOString().split("T")[0]
+    ads_last_watch: now,
+    ads_date: today
   });
 
-  // Increase ref count
   if (refBy && refBy !== userID) {
     const inviter = await supabaseRequest(
       "GET",
-      `/rest/v1/players?user_id=eq.${refBy}&select=refs`
+      `/rest/v1/users_data?user_id=eq.${refBy}&select=refs`
     );
 
-    if (inviter.length) {
+    if (inviter?.length) {
+      const updated = (inviter[0].refs || 0) + 1;
+
       await supabaseRequest(
         "PATCH",
-        `/rest/v1/players?user_id=eq.${refBy}`,
-        { refs: inviter[0].refs + 1 }
+        `/rest/v1/users_data?user_id=eq.${refBy}`,
+        { refs: updated }
       );
     }
   }
 }
 
-// ============= PROFILE =============
+/* ================= PROFILE ================= */
 async function getProfile(userID) {
-  const rows = await supabaseRequest(
+  const data = await supabaseRequest(
     "GET",
-    `/rest/v1/players?user_id=eq.${userID}&select=*`
+    `/rest/v1/users_data?user_id=eq.${userID}&select=*`
   );
 
-  if (rows && rows.length) return rows[0];
+  if (!data || data.error) return { points: 0, usdt: 0, refs: 0 };
+  if (data.length) return data[0];
 
   return { points: 0, usdt: 0, refs: 0 };
 }
 
-// ============= SWAP =============
+/* ================= SWAP ================= */
 async function swap(userID, points) {
   const profile = await getProfile(userID);
-
+  if (profile.error) return { error: "Profile not found" };
   if (points > profile.points) return { error: "Not enough points" };
 
   const earnUSDT = points / 100000 * 0.01;
 
   await supabaseRequest(
     "PATCH",
-    `/rest/v1/players?user_id=eq.${userID}`,
+    `/rest/v1/users_data?user_id=eq.${userID}`,
     {
       points: profile.points - points,
       usdt: profile.usdt + earnUSDT
@@ -88,68 +93,55 @@ async function swap(userID, points) {
   return await getProfile(userID);
 }
 
-// =========================================
-//          ADS SYSTEM REST API
-// =========================================
-
+/* ================= ADS ================= */
 const DAILY_LIMIT = 100;
-const COOLDOWN = 30; // seconds
+const COOLDOWN = 30;
 const REWARD = 400;
 
-// ============= GET AD STATUS =============
 async function adStatus(userID) {
   const profile = await getProfile(userID);
-
   const today = new Date().toISOString().split("T")[0];
 
-  // Reset daily if changed day
   if (profile.ads_date !== today) {
     await supabaseRequest(
       "PATCH",
-      `/rest/v1/players?user_id=eq.${userID}`,
-      {
-        ads_date: today,
-        ads_watched_today: 0
-      }
+      `/rest/v1/users_data?user_id=eq.${userID}`,
+      { ads_date: today, ads_watched_today: 0 }
     );
 
     profile.ads_watched_today = 0;
-    profile.ads_date = today;
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const cooldown = Math.max(0, profile.ads_last_watch + COOLDOWN - now);
-  const remain = Math.max(0, DAILY_LIMIT - profile.ads_watched_today);
 
-  return { remain, cooldown };
+  return {
+    remain: Math.max(0, DAILY_LIMIT - profile.ads_watched_today),
+    cooldown: Math.max(0, (profile.ads_last_watch || 0) + COOLDOWN - now)
+  };
 }
 
-// ============= WATCH AD =============
 async function adWatch(userID) {
   const status = await adStatus(userID);
-
   if (status.remain <= 0) return { error: "No ads remaining today" };
   if (status.cooldown > 0) return { error: "Wait cooldown" };
 
   const profile = await getProfile(userID);
+  const now = Math.floor(Date.now() / 1000);
 
   await supabaseRequest(
     "PATCH",
-    `/rest/v1/players?user_id=eq.${userID}`,
+    `/rest/v1/users_data?user_id=eq.${userID}`,
     {
       points: profile.points + REWARD,
       ads_watched_today: profile.ads_watched_today + 1,
-      ads_last_watch: Math.floor(Date.now() / 1000)
+      ads_last_watch: now
     }
   );
 
   return await getProfile(userID);
 }
 
-// =========================================
-//             MAIN HANDLER
-// =========================================
-
+/* ================= MAIN ================= */
 export default async function handler(req, res) {
   if (req.method !== "POST")
     return res.status(405).json({ error: "Method not allowed" });
@@ -157,29 +149,13 @@ export default async function handler(req, res) {
   const { action, userID, refBy, points } = req.body;
 
   try {
-    if (action === "registerUser") {
-      await registerUser(userID, refBy);
-      return res.json({ ok: true });
-    }
-
-    if (action === "getProfile") {
-      return res.json(await getProfile(userID));
-    }
-
-    if (action === "swap") {
-      return res.json(await swap(userID, points));
-    }
-
-    if (action === "adStatus") {
-      return res.json(await adStatus(userID));
-    }
-
-    if (action === "adWatch") {
-      return res.json(await adWatch(userID));
-    }
+    if (action === "registerUser") return res.json(await registerUser(userID, refBy));
+    if (action === "getProfile") return res.json(await getProfile(userID));
+    if (action === "swap") return res.json(await swap(userID, points));
+    if (action === "adStatus") return res.json(await adStatus(userID));
+    if (action === "adWatch") return res.json(await adWatch(userID));
 
     res.status(400).json({ error: "Invalid action" });
-
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
