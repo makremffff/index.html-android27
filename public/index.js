@@ -1,4 +1,6 @@
-// ====== helpers ======
+/* ============================
+   🔥 Helper Functions
+============================ */
 const $ = id => document.getElementById(id);
 
 function getTelegramUserID() {
@@ -6,24 +8,38 @@ function getTelegramUserID() {
     return window.Telegram.WebApp.initDataUnsafe.user.id;
 
   const params = new URLSearchParams(location.search);
-  const fake = params.get("fakeId");
-  return fake ? parseInt(fake, 10) : 0;
+  return Number(params.get("fakeId") || 0);
 }
 
+/* ============================
+   🔥 Referral Extractor (الإحالات الحقيقي)
+============================ */
 function getRefParam() {
-  const params = new URLSearchParams(location.search);
-  const refRaw = params.get("startapp") || params.get("ref");
-  if (!refRaw) return null;
-  if (refRaw.startsWith("ref_")) return refRaw.replace("ref_", "");
-  return refRaw;
+  const tg = window.Telegram?.WebApp;
+
+  // ✔ داخل Telegram WebApp
+  if (tg?.initDataUnsafe?.start_param) {
+    let ref = tg.initDataUnsafe.start_param;
+    if (ref.startsWith("ref_")) ref = ref.replace("ref_", "");
+    return ref;
+  }
+
+  // ✔ خارج Telegram (للتجربة)
+  const url = new URLSearchParams(location.search);
+  let ref = url.get("startapp") || url.get("ref");
+  if (!ref) return null;
+  if (ref.startsWith("ref_")) ref = ref.replace("ref_", "");
+  return ref;
 }
 
-// ====== API unified ======
+/* ============================
+   🔥 API Wrapper
+============================ */
 async function api(action, payload = {}) {
-  const uid = getTelegramUserID();
-  const body = { action, user_id: uid, ...payload };
+  const user_id = getTelegramUserID();
+  const body = { action, user_id, ...payload };
 
-  const res = await fetch("/api", {
+  const res = await fetch(`/api/index`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -32,72 +48,43 @@ async function api(action, payload = {}) {
   return res.json();
 }
 
-// ====== registration / profile ======
+/* ============================
+   🔥 Registration
+============================ */
 async function registerUser() {
-  const refBy = getRefParam();
-  await api("register", { ref_by: refBy });
+  const ref_by = getRefParam();
+  return await api("register", { ref_by });
 }
 
+/* ============================
+   🔥 Profile
+============================ */
 async function getProfile() {
   return await api("getProfile");
 }
 
-// ====== UI update ======
-function updateUI(data) {
+async function reloadProfile() {
+  const data = await getProfile();
+  if (!data) return;
+
   $("points").textContent = data.points ?? 0;
   $("usdt").textContent = (data.usdt ?? 0).toFixed(2);
   $("refCount").textContent = data.refs ?? 0;
 
-  if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
-    const u = window.Telegram.WebApp.initDataUnsafe.user;
-
+  // صورة + اسم من Telegram
+  const u = window.Telegram?.WebApp?.initDataUnsafe?.user;
+  if (u) {
     if (u.photo_url) {
       $("userImg").src = u.photo_url;
       $("userImg").style.display = "block";
     }
-
     $("username").textContent = u.first_name || u.username || "";
   }
 }
 
-// ====== صفحات ======
-function showPage(id) {
-  document.querySelectorAll(".page, .screen").forEach(el => el.classList.remove("active"));
-
-  if (id === "home") {
-    $("home").classList.add("active");
-    $("userCircle").style.display = "flex";
-    $("username").style.display = "block";
-    $("topBalance").style.display = "flex";
-    $("adsCounterTop").style.display = "block";
-  } else {
-    $(id).classList.add("active");
-    $("userCircle").style.display = "none";
-    $("username").style.display = "none";
-    $("topBalance").style.display = "none";
-    $("adsCounterTop").style.display = "none";
-  }
-}
-
-// ====== أزرار ======
-function setupButtons() {
-  $("withdrawBtn").onclick = () => showPage("withdraw");
-  $("taskBtn").onclick = () => showPage("task");
-  $("adsBtn").onclick = () => handleWatchAd();
-  $("swapBtn").onclick = () => showPage("swap");
-  $("ledbordBtn").onclick = () => showPage("ledbord");
-  $("refalBtn").onclick = () => showPage("refal");
-
-  ["withdrawBack", "taskBack", "swapBack", "ledbordBack", "refalBack"]
-    .forEach(id => ($(id).onclick = () => showPage("home")));
-
-  $("pointsInput").oninput = () => calcSwap();
-  $("convertBtn").onclick = () => handleConvert();
-
-  $("copyBtn").onclick = () => copyRefLink();
-}
-
-// ====== swap ======
+/* ============================
+   🔥 Swap
+============================ */
 function calcSwap() {
   const pts = parseInt($("pointsInput").value) || 0;
   const usdt = (pts / 100000 * 0.01).toFixed(4);
@@ -118,31 +105,27 @@ async function handleConvert() {
 }
 
 function showSwapMsg(text, type) {
-  const box = $("swapMsg");
-  box.textContent = text;
-  box.className = type;
-  box.style.opacity = "1";
-  setTimeout(() => (box.style.opacity = "0"), 2000);
+  const m = $("swapMsg");
+  m.textContent = text;
+  m.className = type;
+  m.style.opacity = 1;
+
+  setTimeout(() => (m.style.opacity = 0), 2000);
 }
 
-// ====== إحالات ======
-function copyRefLink() {
-  const uid = getTelegramUserID();
-  const link = `https://t.me/Game_win_usdtBot/earn?startapp=ref_${uid}`;
+/* ============================
+   🔥 Ad System
+============================ */
+async function updateAdCounter() {
+  const st = await api("adStatus");
 
-  navigator.clipboard.writeText(link).then(() => {
-    $("copyMsg").style.opacity = "1";
-    setTimeout(() => ($("copyMsg").style.opacity = "0"), 2000);
-  });
-}
-
-// ====== إعلانات GigaPub ======
-async function adStatus() {
-  return await api("adStatus");
+  $("adsCounterTop").textContent = st.remain;
+  $("adsBtn").disabled = !st.canWatch;
+  $("adsBtn").style.opacity = st.canWatch ? 1 : 0.5;
 }
 
 async function handleWatchAd() {
-  const st = await adStatus();
+  const st = await api("adStatus");
   if (!st.canWatch) return;
 
   try {
@@ -151,29 +134,65 @@ async function handleWatchAd() {
     await reloadProfile();
     await updateAdCounter();
   } catch (e) {
-    console.warn("Ad error:", e);
+    console.log("Ad error:", e);
   }
 }
 
-async function updateAdCounter() {
-  const st = await adStatus();
-  $("adsCounterTop").textContent = st.remain;
-  $("adsBtn").disabled = !st.canWatch;
-  $("adsBtn").style.opacity = st.canWatch ? "1" : "0.5";
+/* ============================
+   🔥 Referral Copy Link
+============================ */
+function copyRefLink() {
+  const uid = getTelegramUserID();
+  const link = `https://t.me/Game_win_usdtBot/earn?startapp=ref_${uid}`;
+
+  navigator.clipboard.writeText(link).then(() => {
+    const m = $("copyMsg");
+    m.style.opacity = 1;
+    setTimeout(() => (m.style.opacity = 0), 2000);
+  });
 }
 
-// ====== init ======
-async function reloadProfile() {
-  const data = await getProfile();
-  updateUI(data);
+/* ============================
+   🔥 UI Navigation
+============================ */
+function showPage(id) {
+  document.querySelectorAll(".page, .screen").forEach(e => e.classList.remove("active"));
+  $(id).classList.add("active");
+
+  const home = id === "home";
+
+  $("userCircle").style.display = home ? "flex" : "none";
+  $("username").style.display = home ? "block" : "none";
+  $("topBalance").style.display = home ? "flex" : "none";
+  $("adsCounterTop").style.display = home ? "block" : "none";
 }
 
+function setupButtons() {
+  $("withdrawBtn").onclick = () => showPage("withdraw");
+  $("taskBtn").onclick = () => showPage("task");
+  $("adsBtn").onclick = () => handleWatchAd();
+  $("swapBtn").onclick = () => showPage("swap");
+  $("ledbordBtn").onclick = () => showPage("ledbord");
+  $("refalBtn").onclick = () => showPage("refal");
+
+  ["withdrawBack", "taskBack", "swapBack", "ledbordBack", "refalBack"]
+    .forEach(id => ($(id).onclick = () => showPage("home")));
+
+  $("pointsInput").oninput = calcSwap;
+  $("convertBtn").onclick = handleConvert;
+  $("copyBtn").onclick = copyRefLink;
+}
+
+/* ============================
+   🔥 Init
+============================ */
 async function init() {
   await registerUser();
   setupButtons();
   await reloadProfile();
   calcSwap();
   await updateAdCounter();
+
   setInterval(updateAdCounter, 2000);
 }
 
