@@ -1,145 +1,123 @@
-// /api/index.js
-// خادم صغير يستخدم Supabase REST API فقط (لا يستخدم @supabase/supabase-js)
-
+// مصدر واحد للبيانات – لا يتعامل مع localStorage أبداً
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const BOT_USERNAME = process.env.NEXT_PUBLIC_BOT_USERNAME;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const BOT_USERNAME = process.env.NEXT_PUBLIC_BOT_USERNAME || 'Game_win_usdtBot';
 
+const headers = {
+  'apikey': SUPABASE_ANON_KEY,
+  'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+  'Content-Type': 'application/json',
+  'Prefer': 'return=representation'
+};
+
+async function supabase(table, method, query = '', body = null) {
+  const url = `${SUPABASE_URL}/rest/v1/${table}${query}`;
+  const options = { method, headers };
+  if (body) options.body = JSON.stringify(body);
+  const res = await fetch(url, options);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ====== helpers ======
+const now = () => new Date().toISOString();
+const today = () => now().slice(0, 10);
+
+// ====== actions ======
+async function registerUser({ user_id, ref_by }) {
+  // منع التكرار
+  const exist = await supabase('users_data', 'GET', `?user_id=eq.${user_id}`);
+  if (exist && exist.length) return exist[0];
+
+  // إنشاء المستخدم
+  const row = {
+    user_id,
+    points: 0,
+    usdt: 0,
+    refs: 0,
+    ref_by: ref_by || null,
+    ads_watched_today: 0,
+    ads_last_watch: null,
+    ads_date: today()
+  };
+  const inserted = await supabase('users_data', 'POST', '', row);
+  const user = inserted[0];
+
+  // زيادة refs للداعي
+  if (ref_by) {
+    await supabase('users_data', 'PATCH', `?user_id=eq.${ref_by}`, { refs: 'refs+1' });
+  }
+  return user;
+}
+
+async function getProfile({ user_id }) {
+  const rows = await supabase('users_data', 'GET', `?user_id=eq.${user_id}`);
+  return rows[0] || null;
+}
+
+async function swap({ user_id, points }) {
+  const user = await getProfile({ user_id });
+  if (!user) throw new Error('User not found');
+  if (user.points < points) throw new Error('Not enough points');
+
+  const usdtEarn = (points / 100000 * 0.01);
+  await supabase('users_data', 'PATCH', `?user_id=eq.${user_id}`, {
+    points: user.points - points,
+    usdt: user.usdt + usdtEarn
+  });
+  return { success: true };
+}
+
+async function adStatus({ user_id }) {
+  const user = await getProfile({ user_id });
+  if (!user) throw new Error('User not found');
+
+  const isNewDay = user.ads_date !== today();
+  const watched = isNewDay ? 0 : (user.ads_watched_today || 0);
+  const remain = 100 - watched;
+  const last = user.ads_last_watch ? new Date(user.ads_last_watch).getTime() : 0;
+  const canWatch = remain > 0 && (Date.now() - last > 30_000);
+
+  return { canWatch, remain };
+}
+
+async function adWatch({ user_id }) {
+  const st = await adStatus({ user_id });
+  if (!st.canWatch) throw new Error('Cannot watch now');
+
+  await supabase('users_data', 'PATCH', `?user_id=eq.${user_id}`, {
+    ads_watched_today: 'ads_watched_today+1',
+    ads_last_watch: now(),
+    ads_date: today(),
+    points: 'points+400'
+  });
+  return { success: true };
+}
+
+// ====== router ======
 export default async function handler(req, res) {
+  // السماح لـ CORS من تليجرام
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { action, user_id, ...params } = req.body;
-
-  const headers = {
-    apikey: SUPABASE_KEY,
-    Authorization: `Bearer ${SUPABASE_KEY}`,
-    'Content-Type': 'application/json'
-  };
-
-  const url = (table, query = '') =>
-    `${SUPABASE_URL}/rest/v1/${table}${query}`;
-
-  /* ---------- 1️⃣ registerUser ---------- */
-  if (action === 'registerUser') {
-    const { ref_by } = params;
-
-    // منع التكرار
-    let r = await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers });
-    let rows = await r.json();
-    if (rows.length) return res.json({ ok: 1 });
-
-    // إضافة المستخدم
-    await fetch(url('users_data'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        user_id,
-        points: 0,
-        usdt: 0,
-        refs: 0,
-        ref_by: ref_by || null,
-        ads_watched_today: 0,
-        ads_last_watch: 0,
-        ads_date: new Date().toISOString().slice(0, 10)
-      })
-    });
-
-    // زيادة refs للداعى
-    if (ref_by && ref_by !== user_id) {
-      await fetch(url('users_data', `?user_id=eq.${ref_by}`), { headers })
-        .then(r => r.json())
-        .then(async ([u]) => {
-          if (!u) return;
-          await fetch(url('users_data', `?user_id=eq.${ref_by}`), {
-            method: 'PATCH',
-            headers,
-            body: JSON.stringify({ refs: u.refs + 1 })
-          });
-        });
+  const { action, ...params } = req.body;
+  try {
+    let result;
+    switch (action) {
+      case 'register':   result = await registerUser(params); break;
+      case 'getProfile': result = await getProfile(params);   break;
+      case 'swap':       result = await swap(params);         break;
+      case 'adStatus':   result = await adStatus(params);     break;
+      case 'adWatch':    result = await adWatch(params);      break;
+      default:           return res.status(400).json({ error: 'Bad action' });
     }
-
-    return res.json({ ok: 1 });
+    return res.json(result);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
   }
-
-  /* ---------- 2️⃣ getProfile ---------- */
-  if (action === 'getProfile') {
-    const r = await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers });
-    const [row] = await r.json();
-    if (!row) return res.status(404).json({ error: 'User not found' });
-    return res.json(row);
-  }
-
-  /* ---------- 3️⃣ swap ---------- */
-  if (action === 'swap') {
-    const { points } = params;
-    const r = await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers });
-    const [u] = await r.json();
-    if (!u) return res.status(404).json({ error: 'User not found' });
-    if (u.points < points) return res.json({ error: 'Not enough points' });
-
-    const usdtEarn = (points / 100000 * 0.01).toFixed(4);
-
-    await fetch(url('users_data', `?user_id=eq.${user_id}`), {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({
-        points: u.points - points,
-        usdt: parseFloat((u.usdt + parseFloat(usdtEarn)).toFixed(4))
-      })
-    });
-
-    const updated = await (await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers })).json();
-    return res.json(updated[0]);
-  }
-
-  /* ---------- 4️⃣ adStatus ---------- */
-  if (action === 'adStatus') {
-    const r = await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers });
-    const [u] = await r.json();
-    if (!u) return res.status(404).json({ error: 'User not found' });
-
-    const today = new Date().toISOString().slice(0, 10);
-    if (u.ads_date !== today) {
-      // صفر العداد لو اليوم غير محفوظ
-      await fetch(url('users_data', `?user_id=eq.${user_id}`), {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({
-          ads_watched_today: 0,
-          ads_date: today
-        })
-      });
-      u.ads_watched_today = 0;
-    }
-
-    const DAILY_MAX = 100;
-    const COOLDOWN_SEC = 30;
-    const remaining = DAILY_MAX - u.ads_watched_today;
-    const cooldown  = (Date.now() - new Date(u.ads_last_watch).getTime()) < COOLDOWN_SEC * 1000;
-
-    return res.json({ remaining, cooldown });
-  }
-
-  /* ---------- 5️⃣ adWatch ---------- */
-  if (action === 'adWatch') {
-    const AD_REWARD = 400;
-    const r = await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers });
-    const [u] = await r.json();
-    if (!u) return res.status(404).json({ error: 'User not found' });
-
-    await fetch(url('users_data', `?user_id=eq.${user_id}`), {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({
-        points: u.points + AD_REWARD,
-        ads_watched_today: u.ads_watched_today + 1,
-        ads_last_watch: new Date().toISOString()
-      })
-    });
-
-    const updated = await (await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers })).json();
-    return res.json(updated[0]);
-  }
-
-  return res.status(400).json({ error: 'Unknown action' });
 }
