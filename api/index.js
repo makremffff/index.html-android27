@@ -1,7 +1,5 @@
-// مصدر واحد للبيانات – لا يتعامل مع localStorage أبداً
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const BOT_USERNAME = process.env.NEXT_PUBLIC_BOT_USERNAME || 'Game_win_usdtBot';
 
 const headers = {
   'apikey': SUPABASE_ANON_KEY,
@@ -19,17 +17,14 @@ async function supabase(table, method, query = '', body = null) {
   return res.json();
 }
 
-// ====== helpers ======
 const now = () => new Date().toISOString();
 const today = () => now().slice(0, 10);
 
 // ====== actions ======
 async function registerUser({ user_id, ref_by }) {
-  // منع التكرار
   const exist = await supabase('users_data', 'GET', `?user_id=eq.${user_id}`);
   if (exist && exist.length) return exist[0];
 
-  // إنشاء المستخدم
   const row = {
     user_id,
     points: 0,
@@ -40,13 +35,22 @@ async function registerUser({ user_id, ref_by }) {
     ads_last_watch: null,
     ads_date: today()
   };
+
   const inserted = await supabase('users_data', 'POST', '', row);
   const user = inserted[0];
 
-  // زيادة refs للداعي
   if (ref_by) {
-    await supabase('users_data', 'PATCH', `?user_id=eq.${ref_by}`, { refs: 'refs+1' });
+    const refUser = await supabase('users_data', 'GET', `?user_id=eq.${ref_by}`);
+    if (refUser.length) {
+      await supabase(
+        'users_data',
+        'PATCH',
+        `?user_id=eq.${ref_by}`,
+        { refs: refUser[0].refs + 1 }
+      );
+    }
   }
+
   return user;
 }
 
@@ -61,10 +65,17 @@ async function swap({ user_id, points }) {
   if (user.points < points) throw new Error('Not enough points');
 
   const usdtEarn = (points / 100000 * 0.01);
-  await supabase('users_data', 'PATCH', `?user_id=eq.${user_id}`, {
-    points: user.points - points,
-    usdt: user.usdt + usdtEarn
-  });
+
+  await supabase(
+    'users_data',
+    'PATCH',
+    `?user_id=eq.${user_id}`,
+    {
+      points: user.points - points,
+      usdt: user.usdt + usdtEarn
+    }
+  );
+
   return { success: true };
 }
 
@@ -75,8 +86,9 @@ async function adStatus({ user_id }) {
   const isNewDay = user.ads_date !== today();
   const watched = isNewDay ? 0 : (user.ads_watched_today || 0);
   const remain = 100 - watched;
+
   const last = user.ads_last_watch ? new Date(user.ads_last_watch).getTime() : 0;
-  const canWatch = remain > 0 && (Date.now() - last > 30_000);
+  const canWatch = remain > 0 && (Date.now() - last > 30000);
 
   return { canWatch, remain };
 }
@@ -85,27 +97,34 @@ async function adWatch({ user_id }) {
   const st = await adStatus({ user_id });
   if (!st.canWatch) throw new Error('Cannot watch now');
 
-  await supabase('users_data', 'PATCH', `?user_id=eq.${user_id}`, {
-    ads_watched_today: 'ads_watched_today+1',
-    ads_last_watch: now(),
-    ads_date: today(),
-    points: 'points+400'
-  });
+  const user = await getProfile({ user_id });
+
+  await supabase(
+    'users_data',
+    'PATCH',
+    `?user_id=eq.${user_id}`,
+    {
+      ads_watched_today: user.ads_watched_today + 1,
+      ads_last_watch: now(),
+      ads_date: today(),
+      points: user.points + 400
+    }
+  );
+
   return { success: true };
 }
 
 // ====== router ======
 export default async function handler(req, res) {
-  // السماح لـ CORS من تليجرام
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { action, ...params } = req.body;
+
   try {
     let result;
     switch (action) {
@@ -114,9 +133,11 @@ export default async function handler(req, res) {
       case 'swap':       result = await swap(params);         break;
       case 'adStatus':   result = await adStatus(params);     break;
       case 'adWatch':    result = await adWatch(params);      break;
-      default:           return res.status(400).json({ error: 'Bad action' });
+      default: return res.status(400).json({ error: 'Bad action' });
     }
+
     return res.json(result);
+
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
