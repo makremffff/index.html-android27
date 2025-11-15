@@ -1,162 +1,145 @@
+// /api/index.js
+// خادم صغير يستخدم Supabase REST API فقط (لا يستخدم @supabase/supabase-js)
+
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const BOT_USERNAME = process.env.NEXT_PUBLIC_BOT_USERNAME;
 
-/* ================= SUPABASE REQUEST ================= */
-async function supabaseRequest(method, path, body = null) {
-  const opts = {
-    method,
-    headers: {
-      "apikey": SUPABASE_ANON,
-      "Authorization": `Bearer ${SUPABASE_ANON}`,
-      "Content-Type": "application/json"
-    }
-  };
-  if (body) opts.body = JSON.stringify(body);
-
-  const res = await fetch(`${SUPABASE_URL}${path}`, opts);
-  const data = await res.json().catch(() => null);
-
-  if (!res.ok) return { error: data?.message || "Supabase Error" };
-  return data;
-}
-
-/* ================= REGISTER ================= */
-async function registerUser(userID, refBy) {
-  const exist = await supabaseRequest(
-    "GET",
-    `/rest/v1/users_data?user_id=eq.${userID}&select=*`
-  );
-  if (exist?.length > 0) return;
-
-  const today = new Date().toISOString().split("T")[0];
-  const now = Math.floor(Date.now() / 1000);
-
-  await supabaseRequest("POST", "/rest/v1/users_data", {
-    user_id: userID,
-    points: 0,
-    usdt: 0,
-    ref_by: refBy || null,
-    refs: 0,
-    ads_watched_today: 0,
-    ads_last_watch: now,
-    ads_date: today
-  });
-
-  if (refBy && refBy !== userID) {
-    const inviter = await supabaseRequest(
-      "GET",
-      `/rest/v1/users_data?user_id=eq.${refBy}&select=refs`
-    );
-
-    if (inviter?.length) {
-      const updated = (inviter[0].refs || 0) + 1;
-
-      await supabaseRequest(
-        "PATCH",
-        `/rest/v1/users_data?user_id=eq.${refBy}`,
-        { refs: updated }
-      );
-    }
-  }
-}
-
-/* ================= PROFILE ================= */
-async function getProfile(userID) {
-  const data = await supabaseRequest(
-    "GET",
-    `/rest/v1/users_data?user_id=eq.${userID}&select=*`
-  );
-
-  if (!data || data.error) return { points: 0, usdt: 0, refs: 0 };
-  if (data.length) return data[0];
-
-  return { points: 0, usdt: 0, refs: 0 };
-}
-
-/* ================= SWAP ================= */
-async function swap(userID, points) {
-  const profile = await getProfile(userID);
-  if (profile.error) return { error: "Profile not found" };
-  if (points > profile.points) return { error: "Not enough points" };
-
-  const earnUSDT = points / 100000 * 0.01;
-
-  await supabaseRequest(
-    "PATCH",
-    `/rest/v1/users_data?user_id=eq.${userID}`,
-    {
-      points: profile.points - points,
-      usdt: profile.usdt + earnUSDT
-    }
-  );
-
-  return await getProfile(userID);
-}
-
-/* ================= ADS ================= */
-const DAILY_LIMIT = 100;
-const COOLDOWN = 30;
-const REWARD = 400;
-
-async function adStatus(userID) {
-  const profile = await getProfile(userID);
-  const today = new Date().toISOString().split("T")[0];
-
-  if (profile.ads_date !== today) {
-    await supabaseRequest(
-      "PATCH",
-      `/rest/v1/users_data?user_id=eq.${userID}`,
-      { ads_date: today, ads_watched_today: 0 }
-    );
-
-    profile.ads_watched_today = 0;
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-
-  return {
-    remain: Math.max(0, DAILY_LIMIT - profile.ads_watched_today),
-    cooldown: Math.max(0, (profile.ads_last_watch || 0) + COOLDOWN - now)
-  };
-}
-
-async function adWatch(userID) {
-  const status = await adStatus(userID);
-  if (status.remain <= 0) return { error: "No ads remaining today" };
-  if (status.cooldown > 0) return { error: "Wait cooldown" };
-
-  const profile = await getProfile(userID);
-  const now = Math.floor(Date.now() / 1000);
-
-  await supabaseRequest(
-    "PATCH",
-    `/rest/v1/users_data?user_id=eq.${userID}`,
-    {
-      points: profile.points + REWARD,
-      ads_watched_today: profile.ads_watched_today + 1,
-      ads_last_watch: now
-    }
-  );
-
-  return await getProfile(userID);
-}
-
-/* ================= MAIN ================= */
 export default async function handler(req, res) {
-  if (req.method !== "POST")
-    return res.status(405).json({ error: "Method not allowed" });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { action, userID, refBy, points } = req.body;
+  const { action, user_id, ...params } = req.body;
 
-  try {
-    if (action === "registerUser") return res.json(await registerUser(userID, refBy));
-    if (action === "getProfile") return res.json(await getProfile(userID));
-    if (action === "swap") return res.json(await swap(userID, points));
-    if (action === "adStatus") return res.json(await adStatus(userID));
-    if (action === "adWatch") return res.json(await adWatch(userID));
+  const headers = {
+    apikey: SUPABASE_KEY,
+    Authorization: `Bearer ${SUPABASE_KEY}`,
+    'Content-Type': 'application/json'
+  };
 
-    res.status(400).json({ error: "Invalid action" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  const url = (table, query = '') =>
+    `${SUPABASE_URL}/rest/v1/${table}${query}`;
+
+  /* ---------- 1️⃣ registerUser ---------- */
+  if (action === 'registerUser') {
+    const { ref_by } = params;
+
+    // منع التكرار
+    let r = await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers });
+    let rows = await r.json();
+    if (rows.length) return res.json({ ok: 1 });
+
+    // إضافة المستخدم
+    await fetch(url('users_data'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        user_id,
+        points: 0,
+        usdt: 0,
+        refs: 0,
+        ref_by: ref_by || null,
+        ads_watched_today: 0,
+        ads_last_watch: 0,
+        ads_date: new Date().toISOString().slice(0, 10)
+      })
+    });
+
+    // زيادة refs للداعى
+    if (ref_by && ref_by !== user_id) {
+      await fetch(url('users_data', `?user_id=eq.${ref_by}`), { headers })
+        .then(r => r.json())
+        .then(async ([u]) => {
+          if (!u) return;
+          await fetch(url('users_data', `?user_id=eq.${ref_by}`), {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({ refs: u.refs + 1 })
+          });
+        });
+    }
+
+    return res.json({ ok: 1 });
   }
+
+  /* ---------- 2️⃣ getProfile ---------- */
+  if (action === 'getProfile') {
+    const r = await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers });
+    const [row] = await r.json();
+    if (!row) return res.status(404).json({ error: 'User not found' });
+    return res.json(row);
+  }
+
+  /* ---------- 3️⃣ swap ---------- */
+  if (action === 'swap') {
+    const { points } = params;
+    const r = await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers });
+    const [u] = await r.json();
+    if (!u) return res.status(404).json({ error: 'User not found' });
+    if (u.points < points) return res.json({ error: 'Not enough points' });
+
+    const usdtEarn = (points / 100000 * 0.01).toFixed(4);
+
+    await fetch(url('users_data', `?user_id=eq.${user_id}`), {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({
+        points: u.points - points,
+        usdt: parseFloat((u.usdt + parseFloat(usdtEarn)).toFixed(4))
+      })
+    });
+
+    const updated = await (await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers })).json();
+    return res.json(updated[0]);
+  }
+
+  /* ---------- 4️⃣ adStatus ---------- */
+  if (action === 'adStatus') {
+    const r = await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers });
+    const [u] = await r.json();
+    if (!u) return res.status(404).json({ error: 'User not found' });
+
+    const today = new Date().toISOString().slice(0, 10);
+    if (u.ads_date !== today) {
+      // صفر العداد لو اليوم غير محفوظ
+      await fetch(url('users_data', `?user_id=eq.${user_id}`), {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          ads_watched_today: 0,
+          ads_date: today
+        })
+      });
+      u.ads_watched_today = 0;
+    }
+
+    const DAILY_MAX = 100;
+    const COOLDOWN_SEC = 30;
+    const remaining = DAILY_MAX - u.ads_watched_today;
+    const cooldown  = (Date.now() - new Date(u.ads_last_watch).getTime()) < COOLDOWN_SEC * 1000;
+
+    return res.json({ remaining, cooldown });
+  }
+
+  /* ---------- 5️⃣ adWatch ---------- */
+  if (action === 'adWatch') {
+    const AD_REWARD = 400;
+    const r = await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers });
+    const [u] = await r.json();
+    if (!u) return res.status(404).json({ error: 'User not found' });
+
+    await fetch(url('users_data', `?user_id=eq.${user_id}`), {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({
+        points: u.points + AD_REWARD,
+        ads_watched_today: u.ads_watched_today + 1,
+        ads_last_watch: new Date().toISOString()
+      })
+    });
+
+    const updated = await (await fetch(url('users_data', `?user_id=eq.${user_id}`), { headers })).json();
+    return res.json(updated[0]);
+  }
+
+  return res.status(400).json({ error: 'Unknown action' });
 }
