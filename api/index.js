@@ -1,4 +1,4 @@
-// ====== Supabase config ======
+// ====== Config ======
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -12,17 +12,21 @@ const headers = {
 async function supabase(table, method, query = "", body = null) {
   const url = `${SUPABASE_URL}/rest/v1/${table}${query}`;
   const options = { method, headers };
-
   if (body) options.body = JSON.stringify(body);
-
   const res = await fetch(url, options);
-
-  if (!res.ok) {
-    const msg = await res.text();
-    throw new Error(msg);
-  }
-
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+async function rpc(func, body) {
+  const url = `${SUPABASE_URL}/rest/v1/rpc/${func}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json().catch(() => ({}));
 }
 
 // ====== helpers ======
@@ -31,14 +35,11 @@ const today = () => now().slice(0, 10);
 
 // ====== register ======
 async function registerUser({ user_id, ref_by }) {
-  // منع الشخص من إحالة نفسه
-  if (ref_by == user_id) ref_by = null;
+  if (ref_by === user_id) ref_by = null;
 
-  // هل المستخدم موجود؟
   const exist = await supabase("users_data", "GET", `?user_id=eq.${user_id}`);
   if (exist.length) return exist[0];
 
-  // إنشاء المستخدم الجديد
   const row = {
     user_id,
     points: 0,
@@ -51,27 +52,15 @@ async function registerUser({ user_id, ref_by }) {
   };
 
   const inserted = await supabase("users_data", "POST", "", row);
-  const user = inserted[0];
 
-  // زيادة إحالات الداعي (ref_by)
   if (ref_by) {
-    const refUser = await supabase("users_data", "GET", `?user_id=eq.${ref_by}`);
-    if (refUser.length) {
-      await supabase(
-        "users_data",
-        "PATCH",
-        `?user_id=eq.${ref_by}`,
-        {
-          refs: Number(refUser[0].refs || 0) + 1
-        }
-      );
-    }
+    await rpc("add_referral", { new_user: user_id, ref_by });
   }
 
-  return user;
+  return inserted[0];
 }
 
-// ====== getProfile ======
+// ====== profile ======
 async function getProfile({ user_id }) {
   const rows = await supabase("users_data", "GET", `?user_id=eq.${user_id}`);
   return rows[0] || null;
@@ -80,67 +69,44 @@ async function getProfile({ user_id }) {
 // ====== swap ======
 async function swap({ user_id, points }) {
   const user = await getProfile({ user_id });
-
   if (!user) throw new Error("User not found");
   if (user.points < points) throw new Error("Not enough points");
 
-  const usdtEarn = (points / 100000) * 0.01;
+  const usdtGain = (points / 100000) * 0.01;
 
   await supabase(
     "users_data",
     "PATCH",
     `?user_id=eq.${user_id}`,
     {
-      points: Number(user.points) - Number(points),
-      usdt: Number(user.usdt) + Number(usdtEarn)
+      points: user.points - points,
+      usdt: user.usdt + usdtGain
     }
   );
 
   return { success: true };
 }
 
-// ====== adStatus ======
+// ====== ads ======
 async function adStatus({ user_id }) {
   const user = await getProfile({ user_id });
-
   if (!user) throw new Error("User not found");
 
   const isNewDay = user.ads_date !== today();
-  const watched = isNewDay ? 0 : Number(user.ads_watched_today || 0);
+  const watched = isNewDay ? 0 : (user.ads_watched_today || 0);
   const remain = 100 - watched;
 
-  const lastWatch = user.ads_last_watch
+  const last = user.ads_last_watch
     ? new Date(user.ads_last_watch).getTime()
     : 0;
 
-  const canWatch = remain > 0 && Date.now() - lastWatch > 30000;
+  const canWatch = remain > 0 && (Date.now() - last > 30000);
 
   return { canWatch, remain };
 }
 
-// ====== adWatch ======
 async function adWatch({ user_id }) {
-  const st = await adStatus({ user_id });
-
-  if (!st.canWatch) throw new Error("Cannot watch now");
-
-  const user = await getProfile({ user_id });
-
-  const watchedToday = Number(user.ads_watched_today || 0) + 1;
-  const newPoints = Number(user.points || 0) + 400;
-
-  await supabase(
-    "users_data",
-    "PATCH",
-    `?user_id=eq.${user_id}`,
-    {
-      ads_watched_today: watchedToday,
-      ads_last_watch: now(),
-      ads_date: today(),
-      points: newPoints
-    }
-  );
-
+  await rpc("ad_watch", { uid: user_id });
   return { success: true };
 }
 
@@ -185,6 +151,7 @@ export default async function handler(req, res) {
     }
 
     return res.json(result);
+
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
