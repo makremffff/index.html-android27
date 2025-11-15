@@ -130,31 +130,31 @@
         </div>
 
         <!-- الشاشة الرئيسية -->
-        <div class="screen" id="home">
+        <div class="screen active" id="home">
             <div class="btn-row">
-                <div class="btn" data-page="withdraw">Withdraw</div>
-                <div class="btn" data-page="task">Task</div>
+                <button class="btn" id="withdrawBtn">Withdraw</button>
+                <button class="btn" id="taskBtn">Task</button>
 
                 <!-- زر الإعلانات مع عدد LED فوقه -->
                 <div style="position:relative;">
                     <div class="ads-counter-led" id="adsCounterTop">100</div>
-                    <div class="btn" id="adsBtn">Ads</div>
+                    <button class="btn" id="adsBtn">Ads</button>
                 </div>
 
-                <div class="btn" data-page="swap">Swap</div>
-                <div class="btn" data-page="ledbord">Ledbord</div>
-                <div class="btn" data-page="refal">Refal</div>
+                <button class="btn" id="swapBtn">Swap</button>
+                <button class="btn" id="ledbordBtn">Ledbord</button>
+                <button class="btn" id="refalBtn">Refal</button>
             </div>
         </div>
 
         <!-- صفحات فرعية -->
-        <div class="page" id="withdraw"><button class="back" data-page="home">Back</button></div>
-        <div class="page" id="task"><button class="back" data-page="home">Back</button></div>
-        <div class="page" id="ledbord"><button class="back" data-page="home">Back</button></div>
+        <div class="page" id="withdraw"><button class="back" id="withdrawBack">Back</button></div>
+        <div class="page" id="task"><button class="back" id="taskBack">Back</button></div>
+        <div class="page" id="ledbord"><button class="back" id="ledbordBack">Back</button></div>
 
         <!-- صفحة السواب -->
         <div class="page" id="swap">
-            <button class="back" data-page="home">Back</button>
+            <button class="back" id="swapBack">Back</button>
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:20px;color:#fff;">
                 <h2 style="margin-bottom:30px;">Swap Points to USDT</h2>
 
@@ -179,7 +179,7 @@
 
         <!-- صفحة الريفيرال -->
         <div class="page" id="refal">
-            <button class="back" data-page="home">Back</button>
+            <button class="back" id="refalBack">Back</button>
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:20px;">
                 <h2 style="color:#fff;margin-bottom:30px;">Referral Program</h2>
                 <button id="copyBtn" style="
@@ -193,11 +193,13 @@
         </div>
     </div>
 
-    <!-- 1) GigaPub Ads -->
+    <!-- GigaPub SDK -->
     <script src="https://ad.gigapub.tech/script?id=3459"></script>
-    <!-- 2) Telegram WebApp -->
+
+    <!-- Telegram WebApp -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- 3) Project Logic -->
+
+    <!-- Project Logic -->
     <script src="index.js"></script>
 </body>
 </html>

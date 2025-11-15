@@ -1,25 +1,27 @@
-// /public/index.js
-// Vanilla JS فقط، لا يستخدم أى مكتبات أو localStorage لحفظ بيانات المستخدم
-
-/* ---------- 1️⃣ Helpers ---------- */
+// ====== helpers ======
 const $ = id => document.getElementById(id);
 
 function getTelegramUserID() {
-  if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id) {
+  if (window.Telegram?.WebApp?.initDataUnsafe?.user?.id)
     return window.Telegram.WebApp.initDataUnsafe.user.id;
-  }
-  return 'default';
+  // خارج التليجرام نستخدم queryString كـ fallback
+  const params = new URLSearchParams(location.search);
+  const fake = params.get('fakeId');
+  return fake ? parseInt(fake, 10) : 0;
 }
 
 function getRefParam() {
-  const start = new URLSearchParams(window.location.search).get('startapp');
-  if (start && start.startsWith('ref_')) return start.replace('ref_', '');
-  return null;
+  const params = new URLSearchParams(location.search);
+  const refRaw = params.get('startapp') || params.get('ref');
+  if (!refRaw) return null;
+  if (refRaw.startsWith('ref_')) return refRaw.replace('ref_', '');
+  return refRaw;
 }
 
-async function api(action, params = {}) {
-  const body = { action, ...params, user_id: getTelegramUserID() };
-  const res = await fetch('/api', {
+async function api(action, payload = {}) {
+  const uid = getTelegramUserID();
+  const body = { user_id: uid, ...payload };
+  const res = await fetch(`/api?action=${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -27,63 +29,74 @@ async function api(action, params = {}) {
   return res.json();
 }
 
-/* ---------- 2️⃣ Registration & Profile ---------- */
+// ====== registration / profile ======
 async function registerUser() {
   const refBy = getRefParam();
-  await api('registerUser', { ref_by: refBy });
+  await api('register', { ref_by: refBy });
 }
 
 async function getProfile() {
   const data = await api('getProfile');
-  updateUI(data);
+  return data;
 }
 
-/* ---------- 3️⃣ UI Update ---------- */
+// ====== UI update ======
 function updateUI(data) {
-  $('points').textContent = data.points || 0;
-  $('usdt').textContent   = (data.usdt || 0).toFixed(2);
-  $('refCount').textContent = data.refs || 0;
+  $('points').textContent = data.points ?? 0;
+  $('usdt').textContent   = (data.usdt ?? 0).toFixed(2);
+  $('refCount').textContent = data.refs ?? 0;
+  // صورة واسم المستخدم يأتيان من التليجرام مباشرة
+  if (window.Telegram?.WebApp?.initDataUnsafe?.user) {
+    const u = window.Telegram.WebApp.initDataUnsafe.user;
+    if (u.photo_url) {
+      $('userImg').src = u.photo_url;
+      $('userImg').style.display = 'block';
+    }
+    $('username').textContent = u.first_name || u.username || '';
+  }
 }
 
-/* ---------- 4️⃣ Navigation ---------- */
-function showPage(pageId) {
+// ====== صفحات ======
+function showPage(id) {
   document.querySelectorAll('.page, .screen').forEach(el => el.classList.remove('active'));
-  if (pageId === 'home') {
+  if (id === 'home') {
     $('home').classList.add('active');
     $('userCircle').style.display = 'flex';
-    $('username').style.display   = 'block';
+    $('username').style.display = 'block';
     $('topBalance').style.display = 'flex';
     $('adsCounterTop').style.display = 'block';
   } else {
-    $(pageId).classList.add('active');
+    $(id).classList.add('active');
     $('userCircle').style.display = 'none';
-    $('username').style.display   = 'none';
+    $('username').style.display = 'none';
     $('topBalance').style.display = 'none';
     $('adsCounterTop').style.display = 'none';
   }
 }
 
-/* ---------- 5️⃣ Buttons Setup ---------- */
+// ====== أزرار التنقل ======
 function setupButtons() {
-  // أزرار التنقل الرئيسية
-  document.querySelectorAll('[data-page]').forEach(btn => {
-    btn.addEventListener('click', () => showPage(btn.dataset.page));
-  });
+  // التنقل الرئيسي
+  $('withdrawBtn').onclick = () => showPage('withdraw');
+  $('taskBtn').onclick     = () => showPage('task');
+  $('adsBtn').onclick      = () => handleWatchAd();
+  $('swapBtn').onclick     = () => showPage('swap');
+  $('ledbordBtn').onclick  = () => showPage('ledbord');
+  $('refalBtn').onclick    = () => showPage('refal');
 
-  // زر الإعلانات
-  $('adsBtn').addEventListener('click', handleAdWatch);
+  // أزرار رجوع
+  ['withdrawBack','taskBack','swapBack','ledbordBack','refalBack']
+    .forEach(id => $(id).onclick = () => showPage('home'));
 
-  // زر التحويل
-  $('convertBtn').addEventListener('click', handleConvert);
+  // تحويل النقاط
+  $('pointsInput').oninput = () => calcSwap();
+  $('convertBtn').onclick  = () => handleConvert();
 
-  // زر نسخ الرابط
-  $('copyBtn').addEventListener('click', copyRefLink);
-
-  // حقل الإدخال (حساب مباشر)
-  $('pointsInput').addEventListener('input', calcSwap);
+  // نسخ الإحالة
+  $('copyBtn').onclick = () => copyRefLink();
 }
 
-/* ---------- 6️⃣ Swap Logic ---------- */
+// ====== swap ======
 function calcSwap() {
   const pts = parseInt($('pointsInput').value) || 0;
   const usdt = (pts / 100000 * 0.01).toFixed(4);
@@ -91,16 +104,14 @@ function calcSwap() {
 }
 
 async function handleConvert() {
-  const ptsRequested = parseInt($('pointsInput').value) || 0;
-  if (ptsRequested <= 0) return;
-
-  const res = await api('swap', { points: ptsRequested });
+  const pts = parseInt($('pointsInput').value) || 0;
+  if (pts <= 0) return;
+  const res = await api('swap', { points: pts });
   if (res.error) return showSwapMsg(res.error, 'error');
-
-  showSwapMsg('Success!', 'success');
   $('pointsInput').value = '';
   calcSwap();
-  updateUI(res);
+  await reloadProfile();
+  showSwapMsg('Success!', 'success');
 }
 
 function showSwapMsg(text, type) {
@@ -111,26 +122,10 @@ function showSwapMsg(text, type) {
   setTimeout(() => box.style.opacity = '0', 2000);
 }
 
-/* ---------- 7️⃣ Ads Logic ---------- */
-async function handleAdWatch() {
-  const status = await api('adStatus');
-  if (status.cooldown) return;          // العداد يعمل تلقائياً
-  if (status.remaining <= 0) return;    // وصل للحد اليومى
-
-  try {
-    await window.showGiga();
-    const res = await api('adWatch');
-    updateUI(res);
-  } catch (e) {
-    console.warn('Ad error:', e);
-  }
-}
-
-/* ---------- 8️⃣ Copy Referral Link ---------- */
+// ====== إحالات ======
 function copyRefLink() {
   const uid = getTelegramUserID();
   const link = `https://t.me/Game_win_usdtBot/earn?startapp=ref_${uid}`;
-
   navigator.clipboard.writeText(link).then(() => {
     const m = $('copyMsg');
     m.style.opacity = '1';
@@ -138,24 +133,44 @@ function copyRefLink() {
   });
 }
 
-/* ---------- 9️⃣ Init ---------- */
-async function init() {
-  setupButtons();
-  await registerUser();
-  await getProfile();
-
-  // تحديث العداد كل ثانية
-  setInterval(async () => {
-    const status = await api('adStatus');
-    $('adsCounterTop').textContent = status.remaining;
-    if (status.cooldown) {
-      $('adsBtn').style.pointerEvents = 'none';
-      $('adsBtn').style.opacity = 0.6;
-    } else {
-      $('adsBtn').style.pointerEvents = 'auto';
-      $('adsBtn').style.opacity = 1;
-    }
-  }, 1000);
+// ====== إعلانات GigaPub ======
+async function adStatus() {
+  const res = await api('adStatus');
+  return res;
 }
 
-document.addEventListener('DOMContentLoaded', init);
+async function handleWatchAd() {
+  const st = await adStatus();
+  if (!st.canWatch) return;
+  try {
+    await window.showGiga();
+    await api('adWatch');
+    await reloadProfile();
+    await updateAdCounter();
+  } catch (e) { console.warn('Ad error:', e); }
+}
+
+async function updateAdCounter() {
+  const st = await adStatus();
+  $('adsCounterTop').textContent = st.remain;
+  $('adsBtn').disabled = !st.canWatch;
+  $('adsBtn').style.opacity = st.canWatch ? '1' : '0.5';
+}
+
+// ====== init ======
+async function reloadProfile() {
+  const data = await getProfile();
+  updateUI(data);
+}
+
+async function init() {
+  await registerUser();
+  setupButtons();
+  await reloadProfile();
+  calcSwap();
+  await updateAdCounter();
+  // تحديث العداد كل ثانيتين
+  setInterval(updateAdCounter, 2000);
+}
+
+window.addEventListener('DOMContentLoaded', init);
