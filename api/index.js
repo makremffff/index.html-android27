@@ -42,16 +42,17 @@ export default async function handler(req, res) {
             case 'adWatch':
                 result = await adWatch(params);
                 break;
-            case 'leaderboard': // الإصلاح 5
+            case 'leaderboard':
                 result = await leaderboard();
                 break;
-            case 'withdraw': // الإصلاح 9
+            case 'withdraw':
                 result = await withdraw(params);
                 break;
             default:
                 return res.status(400).json({ success: false, error: `Invalid action: ${action}` });
         }
     } catch (e) {
+        // هذا يلتقط أخطاء الشبكة أو الاستثناءات التي لم يتم معالجتها
         console.error(`API Handler Error for action ${action}:`, e);
         return res.status(500).json({ success: false, error: `Server Error: ${e.message}` });
     }
@@ -76,11 +77,11 @@ async function supabaseFetch(endpoint, method, headers = {}, body = null) {
         body: body ? JSON.stringify(body) : null
     };
 
-    // استخدام fetch المضمون من node-fetch
     const response = await fetch(url, config); 
 
     if (!response.ok) {
         const errorText = await response.text();
+        // هذا الخطأ سيتم لفه بواسطة try...catch في handler ويرجع 500
         throw new Error(`Supabase Error ${response.status}: ${errorText}`);
     }
 
@@ -114,9 +115,7 @@ async function registerUser({ user_id, ref_by, ...telegram_data }) {
         refs: 0,
         ads_watched_today: 0,
         ads_last_watch: 0,
-        // الإصلاح 7: تسجيل التاريخ بصيغة ISO كاملة
         ads_date: now.toISOString(),
-        // يمكن حفظ بعض بيانات التلغرام للمستقبل
         username: telegram_data.username || null,
     };
 
@@ -151,11 +150,11 @@ async function registerUser({ user_id, ref_by, ...telegram_data }) {
 
 /**
  * Get user profile data, applying ad reset logic if necessary.
+ * تم تعديل هذه الدالة لترجع success: false بدلاً من Throw عند عدم العثور على مستخدم.
  */
 async function getProfile({ user_id }) {
     if (!user_id) throw new Error('user_id is required.');
 
-    // Check for daily ad reset before fetching the profile data
     await checkAdReset(user_id);
 
     const data = await supabaseFetch(
@@ -164,7 +163,8 @@ async function getProfile({ user_id }) {
     );
 
     if (data.length === 0) {
-        throw new Error('User not found. Please register first.');
+        // الإصلاح: إرجاع خطأ واضح بدلاً من رمي استثناء (يمنع خطأ 500 غير الضروري)
+        return { success: false, error: 'User not found. Please register first.' };
     }
 
     return { success: true, data: data[0] };
@@ -179,6 +179,7 @@ async function swapPoints({ user_id, points_amount }) {
     }
     
     const user = await getProfile({ user_id });
+    if (!user.success) return user; // <--- التحقق من نتيجة getProfile
     const userData = user.data;
 
     if (userData.points < points_amount) {
@@ -201,7 +202,7 @@ async function swapPoints({ user_id, points_amount }) {
 }
 
 /**
- * Checks if the daily ad counter needs to be reset. (معدلة - الإصلاح 7)
+ * Checks if the daily ad counter needs to be reset.
  */
 async function checkAdReset(user_id) {
     const data = await supabaseFetch(
@@ -214,15 +215,12 @@ async function checkAdReset(user_id) {
     const today = new Date();
     const dbDateObj = new Date(dbDate);
 
-    // الإصلاح 7: مقارنة التواريخ باستخدام toDateString
     if (dbDateObj.toDateString() !== today.toDateString()) {
         
-        // الإصلاح 7: حساب وقت إعادة التعيين
         const nextReset = new Date(dbDateObj);
         nextReset.setDate(nextReset.getDate() + 1); 
-        nextReset.setHours(RESET_HOURS, 0, 0, 0); // ضبط الساعة 15:00:00.000
+        nextReset.setHours(RESET_HOURS, 0, 0, 0); 
 
-        // إذا كان الوقت الحالي (اليوم) أكبر من وقت إعادة التعيين
         if (today.getTime() >= nextReset.getTime()) {
              await supabaseFetch(
                 `/rest/v1/${TABLE}?user_id=eq.${user_id}`,
@@ -230,7 +228,7 @@ async function checkAdReset(user_id) {
                 { 'Prefer': 'return=minimal' },
                 { 
                     ads_watched_today: 0, 
-                    ads_date: today.toISOString() // تسجيل تاريخ اليوم الجديد ISO
+                    ads_date: today.toISOString()
                 }
             );
         }
@@ -244,6 +242,7 @@ async function adStatus({ user_id }) {
     if (!user_id) throw new Error('user_id is required.');
 
     const profile = await getProfile({ user_id });
+    if (!profile.success) return profile; // <--- التحقق من نتيجة getProfile
     const userData = profile.data;
     const now = Date.now();
     const lastWatch = userData.ads_last_watch || 0;
@@ -279,11 +278,13 @@ async function adWatch({ user_id, reward = AD_REWARD_POINTS }) {
     if (!user_id) throw new Error('user_id is required.');
 
     const status = await adStatus({ user_id });
+    if (!status.success) return status;
     if (!status.data.can_watch) {
         return { success: false, error: 'Cannot watch ad now (cooldown/limit).' };
     }
     
     const profile = await getProfile({ user_id });
+    if (!profile.success) return profile; // <--- التحقق من نتيجة getProfile
     const userData = profile.data;
 
     const newPoints = userData.points + reward;
@@ -307,7 +308,7 @@ async function adWatch({ user_id, reward = AD_REWARD_POINTS }) {
 
 
 /**
- * Fetches the leaderboard data (top 10 by points). (الإصلاح 5)
+ * Fetches the leaderboard data (top 10 by points).
  */
 async function leaderboard() {
     const data = await supabaseFetch(
@@ -319,7 +320,7 @@ async function leaderboard() {
 }
 
 /**
- * Handles the withdrawal request logic. (الإصلاح 9)
+ * Handles the withdrawal request logic.
  */
 async function withdraw({ user_id, binance_id, amount }) {
     if (!user_id || !binance_id || amount <= 0) {
@@ -327,6 +328,7 @@ async function withdraw({ user_id, binance_id, amount }) {
     }
     
     const user = await getProfile({ user_id });
+    if (!user.success) return user; // <--- التحقق من نتيجة getProfile
     const userData = user.data;
     
     if (userData.usdt < amount) {
@@ -335,7 +337,6 @@ async function withdraw({ user_id, binance_id, amount }) {
 
     const newUsdt = parseFloat((userData.usdt - amount).toFixed(4));
     
-    // (B) Reduce the balance immediately
     await supabaseFetch(
         `/rest/v1/${TABLE}?user_id=eq.${user_id}`,
         'PATCH',
@@ -343,7 +344,7 @@ async function withdraw({ user_id, binance_id, amount }) {
         { usdt: newUsdt }
     );
     
-    // *إضافة إلى جدول withdraws لإدارة الطلب*
+    // *يجب إضافة تسجيل الطلب في جدول withdrawals هنا*
     
     const updatedProfile = await getProfile({ user_id });
     return { success: true, data: updatedProfile.data, message: 'Withdrawal submitted.' };
