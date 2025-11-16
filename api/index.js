@@ -1,18 +1,48 @@
 // /api/index.js
-import fetch from 'node-fetch'; // لضمان عمل fetch في بيئة Node.js (Vercel)
+
+// يجب التأكد من أن بيئة Vercel تستخدم Node.js 18 أو أحدث لدعم Native Fetch
+// (تم إزالة import fetch من node-fetch)
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const TABLE = 'users_data';
+const USERS_TABLE = 'users_data';
+const WITHDRAWALS_TABLE = 'withdrawals'; // جدول تسجيل السحب
 const POINTS_TO_USDT_RATE = 100000;
 const AD_REWARD_POINTS = 400;
 const DAILY_MAX_ADS = 100;
-const COOLDOWN_SEC = 3;
+const COOLDOWN_SEC = 3; 
 const RESET_HOURS = 15; // 15:00 UTC وقت إعادة التعيين
 
-/**
- * Handles incoming Vercel Serverless Function requests.
- */
+// --- Supabase REST Utility ---
+
+async function supabaseFetch(endpoint, method, headers = {}, body = null) {
+    const url = `${SUPABASE_URL}${endpoint}`;
+    const defaultHeaders = {
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        ...headers
+    };
+
+    const config = {
+        method: method,
+        headers: defaultHeaders,
+        body: body ? JSON.stringify(body) : null
+    };
+
+    const response = await fetch(url, config); 
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Supabase Error ${response.status}: ${errorText}`);
+    }
+
+    if (response.status === 204) return []; 
+    return response.json();
+}
+
+// --- Core API Functions ---
+
 export default async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ success: false, error: 'Method Not Allowed' });
@@ -52,7 +82,6 @@ export default async function handler(req, res) {
                 return res.status(400).json({ success: false, error: `Invalid action: ${action}` });
         }
     } catch (e) {
-        // هذا يلتقط أخطاء الشبكة أو الاستثناءات التي لم يتم معالجتها
         console.error(`API Handler Error for action ${action}:`, e);
         return res.status(500).json({ success: false, error: `Server Error: ${e.message}` });
     }
@@ -60,45 +89,14 @@ export default async function handler(req, res) {
     res.status(200).json(result);
 }
 
-// --- Supabase REST Utility ---
-
-async function supabaseFetch(endpoint, method, headers = {}, body = null) {
-    const url = `${SUPABASE_URL}${endpoint}`;
-    const defaultHeaders = {
-        'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'Content-Type': 'application/json',
-        ...headers
-    };
-
-    const config = {
-        method: method,
-        headers: defaultHeaders,
-        body: body ? JSON.stringify(body) : null
-    };
-
-    const response = await fetch(url, config); 
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        // هذا الخطأ سيتم لفه بواسطة try...catch في handler ويرجع 500
-        throw new Error(`Supabase Error ${response.status}: ${errorText}`);
-    }
-
-    if (response.status === 204) return []; 
-    return response.json();
-}
-
-// --- Core API Functions ---
-
 /**
- * Register a new user, prevent duplication, and award referral bonus to the referrer.
+ * Register a new user, saving full Telegram data.
  */
-async function registerUser({ user_id, ref_by, ...telegram_data }) {
+async function registerUser({ user_id, ref_by, username, first_name, photo_url }) {
     if (!user_id) throw new Error('user_id is required.');
 
     const existingUser = await supabaseFetch(
-        `/rest/v1/${TABLE}?user_id=eq.${user_id}&select=user_id`,
+        `/rest/v1/${USERS_TABLE}?user_id=eq.${user_id}&select=user_id`,
         'GET'
     );
     
@@ -116,11 +114,13 @@ async function registerUser({ user_id, ref_by, ...telegram_data }) {
         ads_watched_today: 0,
         ads_last_watch: 0,
         ads_date: now.toISOString(),
-        username: telegram_data.username || null,
+        username: username || null,
+        first_name: first_name || null,
+        photo_url: photo_url || null,
     };
 
     await supabaseFetch(
-        `/rest/v1/${TABLE}`,
+        `/rest/v1/${USERS_TABLE}`,
         'POST',
         { 'Prefer': 'return=minimal' },
         newUser
@@ -129,7 +129,7 @@ async function registerUser({ user_id, ref_by, ...telegram_data }) {
     // Increment ref count for the referrer
     if (ref_by && ref_by !== user_id) {
         const referrer = await supabaseFetch(
-            `/rest/v1/${TABLE}?user_id=eq.${ref_by}&select=user_id,refs`,
+            `/rest/v1/${USERS_TABLE}?user_id=eq.${ref_by}&select=user_id,refs`,
             'GET'
         );
         
@@ -137,7 +137,7 @@ async function registerUser({ user_id, ref_by, ...telegram_data }) {
             const newRefsCount = referrer[0].refs + 1;
             
             await supabaseFetch(
-                `/rest/v1/${TABLE}?user_id=eq.${ref_by}`,
+                `/rest/v1/${USERS_TABLE}?user_id=eq.${ref_by}`,
                 'PATCH',
                 { 'Prefer': 'return=minimal' },
                 { refs: newRefsCount }
@@ -149,21 +149,21 @@ async function registerUser({ user_id, ref_by, ...telegram_data }) {
 }
 
 /**
- * Get user profile data, applying ad reset logic if necessary.
- * تم تعديل هذه الدالة لترجع success: false بدلاً من Throw عند عدم العثور على مستخدم.
+ * return بيانات كاملة ومتناسقة مع الواجهة الأمامية. (إصلاح 2)
  */
 async function getProfile({ user_id }) {
     if (!user_id) throw new Error('user_id is required.');
 
     await checkAdReset(user_id);
 
+    const SELECT_FIELDS = 'points,usdt,refs,ads_last_watch,ads_watched_today,username,first_name,photo_url';
+
     const data = await supabaseFetch(
-        `/rest/v1/${TABLE}?user_id=eq.${user_id}&select=*`,
+        `/rest/v1/${USERS_TABLE}?user_id=eq.${user_id}&select=${SELECT_FIELDS}`,
         'GET'
     );
 
     if (data.length === 0) {
-        // الإصلاح: إرجاع خطأ واضح بدلاً من رمي استثناء (يمنع خطأ 500 غير الضروري)
         return { success: false, error: 'User not found. Please register first.' };
     }
 
@@ -179,7 +179,7 @@ async function swapPoints({ user_id, points_amount }) {
     }
     
     const user = await getProfile({ user_id });
-    if (!user.success) return user; // <--- التحقق من نتيجة getProfile
+    if (!user.success) return user; 
     const userData = user.data;
 
     if (userData.points < points_amount) {
@@ -191,7 +191,7 @@ async function swapPoints({ user_id, points_amount }) {
     const newUsdt = parseFloat((userData.usdt + usdtEarned).toFixed(4));
 
     await supabaseFetch(
-        `/rest/v1/${TABLE}?user_id=eq.${user_id}`,
+        `/rest/v1/${USERS_TABLE}?user_id=eq.${user_id}`,
         'PATCH',
         { 'Prefer': 'return=minimal' },
         { points: newPoints, usdt: newUsdt }
@@ -202,19 +202,21 @@ async function swapPoints({ user_id, points_amount }) {
 }
 
 /**
- * Checks if the daily ad counter needs to be reset.
+ * إصلاح checkAdReset: يجب العودة لإعادة تعيين ads_date عند اختلاف اليوم.
  */
 async function checkAdReset(user_id) {
     const data = await supabaseFetch(
-        `/rest/v1/${TABLE}?user_id=eq.${user_id}&select=ads_date`,
+        `/rest/v1/${USERS_TABLE}?user_id=eq.${user_id}&select=ads_date`,
         'GET'
     );
+    // إذا ما في ads_date → تجاهل بدون أخطاء (إصلاح 6)
     if (data.length === 0 || !data[0].ads_date) return;
 
     const dbDate = data[0].ads_date;
     const today = new Date();
     const dbDateObj = new Date(dbDate);
 
+    // التحقق من اختلاف اليوم
     if (dbDateObj.toDateString() !== today.toDateString()) {
         
         const nextReset = new Date(dbDateObj);
@@ -223,7 +225,7 @@ async function checkAdReset(user_id) {
 
         if (today.getTime() >= nextReset.getTime()) {
              await supabaseFetch(
-                `/rest/v1/${TABLE}?user_id=eq.${user_id}`,
+                `/rest/v1/${USERS_TABLE}?user_id=eq.${user_id}`,
                 'PATCH',
                 { 'Prefer': 'return=minimal' },
                 { 
@@ -236,13 +238,13 @@ async function checkAdReset(user_id) {
 }
 
 /**
- * Returns the current ad watching status (cooldown, limit).
+ * adStatus يجب أن يرجع remaining_cooldown_sec و ads_watched_today (إصلاح 3).
  */
 async function adStatus({ user_id }) {
     if (!user_id) throw new Error('user_id is required.');
 
     const profile = await getProfile({ user_id });
-    if (!profile.success) return profile; // <--- التحقق من نتيجة getProfile
+    if (!profile.success) return profile;
     const userData = profile.data;
     const now = Date.now();
     const lastWatch = userData.ads_last_watch || 0;
@@ -266,13 +268,14 @@ async function adStatus({ user_id }) {
         data: { 
             can_watch: canWatch, 
             remaining_cooldown_sec: remainingCooldownSec,
+            ads_last_watch: lastWatch, // إرجاعها للموثوقية (لن يستخدمها الفرونت)
             ads_watched_today: watchedToday
         } 
     };
 }
 
 /**
- * Rewards the user with points and updates ad metrics after a successful watch.
+ * تعديل دالة adWatch بحيث: add default value reward = AD_REWARD_POINTS. (إصلاح 1)
  */
 async function adWatch({ user_id, reward = AD_REWARD_POINTS }) {
     if (!user_id) throw new Error('user_id is required.');
@@ -284,7 +287,7 @@ async function adWatch({ user_id, reward = AD_REWARD_POINTS }) {
     }
     
     const profile = await getProfile({ user_id });
-    if (!profile.success) return profile; // <--- التحقق من نتيجة getProfile
+    if (!profile.success) return profile;
     const userData = profile.data;
 
     const newPoints = userData.points + reward;
@@ -292,7 +295,7 @@ async function adWatch({ user_id, reward = AD_REWARD_POINTS }) {
     const now = Date.now();
 
     await supabaseFetch(
-        `/rest/v1/${TABLE}?user_id=eq.${user_id}`,
+        `/rest/v1/${USERS_TABLE}?user_id=eq.${user_id}`,
         'PATCH',
         { 'Prefer': 'return=minimal' },
         { 
@@ -306,13 +309,12 @@ async function adWatch({ user_id, reward = AD_REWARD_POINTS }) {
     return { success: true, data: updatedProfile.data };
 }
 
-
 /**
- * Fetches the leaderboard data (top 10 by points).
+ * Gets leaderboard data.
  */
 async function leaderboard() {
     const data = await supabaseFetch(
-        `/rest/v1/${TABLE}?select=user_id,username,points&order=points.desc&limit=10`,
+        `/rest/v1/${USERS_TABLE}?select=user_id,username,points,first_name&order=points.desc&limit=10`,
         'GET'
     );
     
@@ -320,7 +322,7 @@ async function leaderboard() {
 }
 
 /**
- * Handles the withdrawal request logic.
+ * تحديث withdraw: تسجيل طلب سحب جديد في جدول withdrawals أولاً. (إصلاح 5)
  */
 async function withdraw({ user_id, binance_id, amount }) {
     if (!user_id || !binance_id || amount <= 0) {
@@ -328,7 +330,7 @@ async function withdraw({ user_id, binance_id, amount }) {
     }
     
     const user = await getProfile({ user_id });
-    if (!user.success) return user; // <--- التحقق من نتيجة getProfile
+    if (!user.success) return user; 
     const userData = user.data;
     
     if (userData.usdt < amount) {
@@ -337,15 +339,29 @@ async function withdraw({ user_id, binance_id, amount }) {
 
     const newUsdt = parseFloat((userData.usdt - amount).toFixed(4));
     
+    // 1. تسجيل طلب السحب في جدول withdrawals
+    const withdrawalRecord = {
+        user_id: user_id,
+        binance_id: binance_id,
+        amount: amount,
+        status: 'pending' 
+    };
+
     await supabaseFetch(
-        `/rest/v1/${TABLE}?user_id=eq.${user_id}`,
+        `/rest/v1/${WITHDRAWALS_TABLE}`,
+        'POST',
+        { 'Prefer': 'return=minimal' },
+        withdrawalRecord
+    );
+
+    // 2. خصم الرصيد من جدول المستخدمين
+    await supabaseFetch(
+        `/rest/v1/${USERS_TABLE}?user_id=eq.${user_id}`,
         'PATCH',
         { 'Prefer': 'return=minimal' },
         { usdt: newUsdt }
     );
     
-    // *يجب إضافة تسجيل الطلب في جدول withdrawals هنا*
-    
     const updatedProfile = await getProfile({ user_id });
-    return { success: true, data: updatedProfile.data, message: 'Withdrawal submitted.' };
+    return { success: true, data: updatedProfile.data, message: 'Withdrawal request submitted successfully! It will be processed soon.' };
 }
