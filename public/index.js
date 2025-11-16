@@ -80,7 +80,6 @@ async function api(action, params = {}) {
         const response = await fetch(`/api/index`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            // الإصلاح 1: تضمين action في الـ body
             body: JSON.stringify({ action, ...params }),
         });
 
@@ -89,14 +88,12 @@ async function api(action, params = {}) {
         }
 
         const data = await response.json();
-        // الإصلاح 8: التحقق من success في الدالة الرئيسية
         if (!data.success) {
             throw new Error(data.error || 'Unknown API Error');
         }
         return data;
     } catch (error) {
         console.error(`Error during API call to /api/index (Action: ${action}):`, error);
-        // عرض الخطأ للمستخدم عبر شريط الإشعارات
         showNotif(`Operation failed: ${error.message}`, 'error'); 
         return { success: false, error: error.message };
     } finally {
@@ -105,7 +102,7 @@ async function api(action, params = {}) {
 }
 
 /**
- * Registers the user with the backend, handling referral logic. (معدلة)
+ * Registers the user with the backend, handling referral logic.
  */
 async function registerUser() {
     const userId = getTelegramUserID();
@@ -116,7 +113,6 @@ async function registerUser() {
         return;
     }
     
-    // الإصلاح 6: تمرير كل بيانات المستخدم
     const userData = window.Telegram?.WebApp?.initDataUnsafe?.user || {};
     
     const response = await api('register', {
@@ -131,11 +127,10 @@ async function registerUser() {
 }
 
 /**
- * Fetches the user's profile and data from the backend. (معدلة)
+ * Fetches the user's profile and data from the backend.
  */
 async function getProfile() {
     const userId = getTelegramUserID();
-    // يجب أن تكون دالة api قد قامت بالتحقق من response.success
     const response = await api('profile', { user_id: userId });
 
     if (response.success && response.data) {
@@ -170,7 +165,6 @@ function updateUI(data) {
 
 /**
  * Handles the logic for displaying pages and views.
- * @param {string} id - The ID of the page to show ('home', 'withdraw', 'swap', etc.).
  */
 function showPage(id) {
     document.querySelectorAll('.page, .screen').forEach(el => el.classList.remove('active'));
@@ -189,16 +183,14 @@ function showPage(id) {
         if (UI.username) UI.username.style.display = 'none';
         if (UI.topBalance) UI.topBalance.style.display = 'none';
 
-        // Specific actions when opening certain pages
         if (id === 'withdraw' && UI.availableUsdt) {
-            // Display current USDT balance on the withdraw page
             UI.availableUsdt.textContent = UI.usdt.textContent; 
         }
     }
 }
 
 /**
- * Loads and renders the leaderboard data. (الإصلاح 5)
+ * Loads and renders the leaderboard data.
  */
 async function loadLeaderboard() {
     if (!UI.leaderboardList || !UI.leaderboardStatus) return;
@@ -240,7 +232,7 @@ function calcSwap() {
 }
 
 /**
- * Handles the points-to-USDT conversion logic (Swap). (معدلة)
+ * Handles the points-to-USDT conversion logic (Swap).
  */
 async function handleConvert() {
     const ptsRequested = parseInt(UI.pointsInput.value) || 0;
@@ -264,7 +256,7 @@ async function handleConvert() {
 }
 
 /**
- * Handles the withdrawal request logic. (معدلة)
+ * Handles the withdrawal request logic.
  */
 async function handleWithdraw() {
     const binanceId = UI.binanceIdInput.value.trim();
@@ -280,7 +272,6 @@ async function handleWithdraw() {
         return;
     }
     
-    // استدعاء endpoint 'withdraw' (الإصلاح 9)
     const response = await api('withdraw', {
         user_id: getTelegramUserID(),
         binance_id: binanceId,
@@ -290,7 +281,7 @@ async function handleWithdraw() {
     if (UI.withdrawMsg) {
         if (response.success && response.data) {
             showMsg(UI.withdrawMsg, 'Withdrawal request successful!', 'success');
-            updateUI(response.data); // تحديث الرصيد بعد السحب
+            updateUI(response.data);
             UI.binanceIdInput.value = '';
             UI.withdrawAmountInput.value = '';
         } else {
@@ -300,20 +291,18 @@ async function handleWithdraw() {
 }
 
 /**
- * Handles the logic for watching an ad. (معدلة - الإصلاح 2 و 3)
+ * Handles the logic for watching an ad.
  */
 async function handleAdWatch() {
     const userId = getTelegramUserID();
     if (!userId) return;
 
-    // الإصلاح 2: حماية نداء showGiga
     if (!window.showGiga) { 
         console.warn("showGiga() not found.");
         showNotif("Ad service not available.", 'error'); 
         return; 
     }
 
-    // الإصلاح 3: 1. Check ad status first
     const statusResponse = await api('adStatus', { user_id: userId });
     
     if (!statusResponse.success) {
@@ -330,12 +319,9 @@ async function handleAdWatch() {
         return;
     }
     
-    // 2. Show GigaPub Ad (external function)
     try {
-        // الإصلاح 2: استدعاء showGiga بعد التحقق
         await window.showGiga();
         
-        // 3. Notify backend that the ad was watched
         const watchResponse = await api('adWatch', { 
             user_id: userId,
             reward: AD_REWARD
@@ -360,7 +346,6 @@ async function handleAdWatch() {
 function updateAdButton(data) {
     if (!UI.adsBtn) return;
     
-    // نعتمد على البيانات في getProfile التي يتم تحديثها بعد كل عملية
     const watched = data.ads_watched_today || 0;
     const last = data.ads_last_watch || 0;
     const now = Date.now();
@@ -378,12 +363,10 @@ function updateAdButton(data) {
         UI.adsBtn.style.opacity = 0.6;
         UI.adsBtn.textContent = `Wait ${COOLDOWN_SEC - timeSinceLast}s`;
         
-        // Set timeout to re-check status
         setTimeout(() => getProfile(), (COOLDOWN_SEC - timeSinceLast) * 1000 + 500); 
         return;
     }
 
-    // Ready to watch
     UI.adsBtn.style.opacity = 1;
     UI.adsBtn.style.pointerEvents = 'auto';
     UI.adsBtn.textContent = 'Ads';
@@ -406,7 +389,7 @@ function showMsg(element, text, type) {
 function showNotif(text, type = 'info') {
     if (!UI.notifBar) return;
     UI.notifBar.textContent = text;
-    UI.notifBar.className = type; // يمكن استخدامها لتغيير لون الخلفية/الحد
+    UI.notifBar.className = type;
     UI.notifBar.style.display = 'block';
     setTimeout(() => UI.notifBar.style.display = 'none', 4000);
 }
@@ -433,7 +416,7 @@ function copyRefLink() {
 }
 
 /**
- * Sets up all event listeners for the UI elements. (معدلة - الإصلاح 4 و 5)
+ * Sets up all event listeners for the UI elements.
  */
 function setupButtons() {
     // 1. Page Navigation 
@@ -441,7 +424,6 @@ function setupButtons() {
         button.addEventListener('click', (e) => {
             const pageId = e.currentTarget.getAttribute('data-page');
             showPage(pageId);
-            // الإصلاح 5: جلب بيانات لوحة الصدارة عند فتح الصفحة
             if (pageId === 'ledbord') loadLeaderboard();
         });
     });
@@ -450,16 +432,15 @@ function setupButtons() {
     if (UI.adsBtn) UI.adsBtn.addEventListener('click', handleAdWatch);
     if (UI.copyBtn) UI.copyBtn.addEventListener('click', copyRefLink);
     
-    // 3. Swap Functionality (الإصلاح 4)
+    // 3. Swap Functionality 
     if (UI.pointsInput) UI.pointsInput.addEventListener('input', calcSwap);
     const convertBtn = document.querySelector('[data-action="submit-convert"]');
     if (convertBtn) convertBtn.addEventListener('click', handleConvert);
 
-    // 4. Withdraw Functionality (الإصلاح 4)
+    // 4. Withdraw Functionality 
     const withdrawBtn = document.querySelector('[data-action="submit-withdraw"]');
     if (withdrawBtn) withdrawBtn.addEventListener('click', handleWithdraw);
     
-    // Initial view
     showPage('home');
 }
 
@@ -479,10 +460,15 @@ async function init() {
     // 4. Initial calculations for Swap page
     calcSwap(); 
 
-    // Hide loader only after all initial data is loaded and UI is set
     if (UI.loaderOverlay) UI.loaderOverlay.style.display = 'none';
     
     console.log("App initialized.");
+}
+
+// === Telegram WebApp Fix ===
+if (window.Telegram && window.Telegram.WebApp) {
+    window.Telegram.WebApp.ready();
+    window.Telegram.WebApp.expand();
 }
 
 // Start the application
